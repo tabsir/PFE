@@ -1,0 +1,16 @@
+# Ignore raw CSVs
+*.csv
+# Specific safety for the arrow files
+*.arrow
+
+# Ignore the generated Parquet and Arrow shards
+global_nids_matrix.parquet
+
+
+# Ignore virtual environments
+venv/
+.conda/
+
+
+
+
