@@ -31,7 +31,13 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
     # Parcours par lots
     for i in range(0, total_count, batch_size):
         batch = dataset[i : i + batch_size]
-        batch_matrix = np.column_stack([batch[col] for col in cont_cols])
+        # Correction : Remplacer les None par 0.0 lors de la création de la matrice
+        batch_matrix = np.column_stack([
+            np.array(batch[col], dtype=np.float64) for col in cont_cols
+        ])
+        # Nettoyage des NaNs (au cas où il y aurait des divisions par zéro dans les fichiers source)
+        batch_matrix = np.nan_to_num(batch_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+        
         
         sum_x += np.sum(batch_matrix, axis=0)
         sum_sq_x += np.sum(batch_matrix ** 2, axis=0)
@@ -57,5 +63,5 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
 
 if __name__ == "__main__":
     # Ce chemin doit pointer vers les données générées par ton notebook
-    TRAIN_PATH = "../data/nids_transformer_split/train" 
+    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train" 
     compute_global_statistics(TRAIN_PATH)

@@ -94,6 +94,7 @@ class SpatioTemporalTransformer(nn.Module):
         self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
         self.mae_mask_ratio = init_mae
         
+        
         # 6. Décodeur Asymétrique Léger (Pour la Reconstruction Zero-Day)
         self.decoder = nn.Sequential(
             nn.Linear(d_model, d_model // 2),
@@ -107,9 +108,11 @@ class SpatioTemporalTransformer(nn.Module):
         # Étape 1 : Embedding Hybride
         x = self.embedding(cont_data, cat_data)
         
-        # Étape 2 : Masquage Spatial (MAE dynamique)
+       # Étape 2 : Masquage Spatial (MAE dynamique)
         spatial_mask = torch.rand(batch_size, seq_len, device=x.device) < self.mae_mask_ratio
-        x[spatial_mask] = self.mask_token
+        # MODIFICATION : Cast dynamique du token pour la compatibilité FP16 (autocast)
+        x[spatial_mask] = self.mask_token.to(dtype=x.dtype)
+        
         
         # Étape 3 : Addition de la position temporelle
         x = x + self.pos_encoder

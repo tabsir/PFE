@@ -33,15 +33,26 @@ class SpatioTemporalNIDSDataset(Dataset):
     def __getitem__(self, idx):
         window = self.data[idx : idx + self.seq_len]
         
-        # Extraction et Normalisation des continues
-        cont_features = np.column_stack([window[col] for col in self.cont_cols])
+        # 1. Extraction et sécurisation des données continues
+        # On force le type float64 pour gérer les éventuels 'None' qui deviennent des 'NaN'
+        cont_features = np.column_stack([
+            np.array(window[col], dtype=np.float64) for col in self.cont_cols
+        ])
+        
+        # 2. Nettoyage des NaNs (remplacement par 0.0)
+        cont_features = np.nan_to_num(cont_features, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # 3. Conversion en tenseur et normalisation
         cont_tensor = torch.tensor(cont_features, dtype=torch.float32)
         normalized_cont = (cont_tensor - self.mean) / self.std
         
-        # Extraction des catégories
-        cat_features = np.column_stack([window[col] for col in self.cat_cols])
+        # 4. Extraction et sécurisation des catégories
+        # On s'assure que les catégories sont bien des entiers (long)
+        cat_features = np.column_stack([
+            np.array(window[col], dtype=np.int64) for col in self.cat_cols
+        ])
         
-        # Extraction de la cible finale de la séquence
+        # 5. Extraction de la cible finale
         target_label = window[self.label_col][-1]
         
         return {
@@ -52,7 +63,7 @@ class SpatioTemporalNIDSDataset(Dataset):
 
 # Test d'intégration complet et sans approximation
 if __name__ == "__main__":
-    TRAIN_PATH = "../data/nids_transformer_split/train"
+    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train"
     STATS_PATH = "nids_normalization_stats.json"
     
     try:
