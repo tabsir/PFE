@@ -1,0 +1,61 @@
+import numpy as np
+import json
+from datasets import load_from_disk
+import os
+
+def compute_global_statistics(arrow_dir_path, batch_size=500000):
+    print(f"Initialisation du calcul des statistiques globales depuis {arrow_dir_path}...")
+    
+    if not os.path.exists(arrow_dir_path):
+        raise FileNotFoundError(f"ERREUR FATALE : Le dossier {arrow_dir_path} est introuvable. As-tu bien exécuté le notebook 01_data_exploration.ipynb ?")
+
+    dataset = load_from_disk(arrow_dir_path)
+    
+    # Définition stricte des colonnes selon dataset_info.json
+    all_cols = dataset.column_names
+    cat_cols = ['PROTOCOL', 'L4_DST_PORT', 'TCP_FLAGS', 'L4_SRC_PORT'] 
+    ignore_cols = ['Label', 'Attack', 'IPV4_SRC_ADDR', 'IPV4_DST_ADDR']
+    
+    # Déduction dynamique stricte : 55 - 4 - 4 = 47
+    cont_cols = [c for c in all_cols if c not in cat_cols and c not in ignore_cols]
+    
+    n_features = len(cont_cols)
+    total_count = len(dataset)
+    
+    print(f"Extraction des statistiques pour exactement {n_features} features continues...")
+    
+    # Vecteurs d'accumulation en Float64 pour éviter l'overflow
+    sum_x = np.zeros(n_features, dtype=np.float64)
+    sum_sq_x = np.zeros(n_features, dtype=np.float64)
+    
+    # Parcours par lots
+    for i in range(0, total_count, batch_size):
+        batch = dataset[i : i + batch_size]
+        batch_matrix = np.column_stack([batch[col] for col in cont_cols])
+        
+        sum_x += np.sum(batch_matrix, axis=0)
+        sum_sq_x += np.sum(batch_matrix ** 2, axis=0)
+        
+        progress = min(i + batch_size, total_count)
+        print(f"   -> Progression : {progress} / {total_count} lignes traitées.")
+        
+    mean = sum_x / total_count
+    variance = (sum_sq_x / total_count) - (mean ** 2)
+    std = np.sqrt(np.maximum(variance, 1e-8)) 
+    
+    stats = {
+        "features": cont_cols,
+        "mean": mean.tolist(),
+        "std": std.tolist()
+    }
+    
+    output_file = "nids_normalization_stats.json"
+    with open(output_file, "w") as f:
+        json.dump(stats, f, indent=4)
+        
+    print(f"✅ Statistiques globales générées et sauvegardées dans '{output_file}'.")
+
+if __name__ == "__main__":
+    # Ce chemin doit pointer vers les données générées par ton notebook
+    TRAIN_PATH = "../data/nids_transformer_split/train" 
+    compute_global_statistics(TRAIN_PATH)
