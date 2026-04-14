@@ -3,22 +3,22 @@
   "citation": "",
   "config_name": "default",
   "dataset_name": "parquet",
-  "dataset_size": 6055703582,
+  "dataset_size": 6595246454,
   "description": "",
   "download_checksums": {
-    "/home/aka/PFE-code/notebooks/global_nids_matrix.parquet": {
-      "num_bytes": 1238560739,
+    "/home/aka/PFE-code/global_nids_matrix.parquet": {
+      "num_bytes": 1219809351,
       "checksum": null
     }
   },
-  "download_size": 1238560739,
+  "download_size": 1219809351,
   "features": {
     "FLOW_START_MILLISECONDS": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "FLOW_END_MILLISECONDS": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "IPV4_SRC_ADDR": {
@@ -66,11 +66,11 @@
       "_type": "Value"
     },
     "CLIENT_TCP_FLAGS": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "SERVER_TCP_FLAGS": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "FLOW_DURATION_MILLISECONDS": {
@@ -170,11 +170,11 @@
       "_type": "Value"
     },
     "ICMP_TYPE": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "ICMP_IPV4_TYPE": {
-      "dtype": "int32",
+      "dtype": "int64",
       "_type": "Value"
     },
     "DNS_QUERY_ID": {
@@ -236,11 +236,11 @@
   },
   "homepage": "",
   "license": "",
-  "size_in_bytes": 7294264321,
+  "size_in_bytes": 7815055805,
   "splits": {
     "train": {
       "name": "train",
-      "num_bytes": 6055703582,
+      "num_bytes": 6595246454,
       "num_examples": 22480953,
       "shard_lengths": [
         2097152,

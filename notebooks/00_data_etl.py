@@ -16,9 +16,28 @@ def load_optimized_csv(file_path):
         float_cols = chunk.select_dtypes(include=['float64']).columns
         chunk[float_cols] = chunk[float_cols].astype('float32')
         
-        # Downcast 64-bit ints to 32-bit
+        # --- DÉBUT DE LA CORRECTION ---
+        # 1. Identifier toutes les colonnes int64
         int_cols = chunk.select_dtypes(include=['int64']).columns
-        chunk[int_cols] = chunk[int_cols].astype('int32')
+        
+        # 2. Exclure explicitement les timestamps (pour éviter l'overflow)
+        # et les colonnes catégorielles (pour ne pas casser les Embedding IDs)
+        columns_to_exclude = [
+            'FLOW_START_MILLISECONDS', 
+            'FLOW_END_MILLISECONDS',
+            'L7_PROTO',
+            'CLIENT_TCP_FLAGS',
+            'SERVER_TCP_FLAGS',
+            'ICMP_TYPE',
+            'ICMP_IPV4_TYPE'
+        ]
+        
+        # 3. Filtrer : on garde seulement les colonnes qui ne sont PAS dans la liste d'exclusion
+        cols_to_downcast = [col for col in int_cols if col not in columns_to_exclude]
+        
+        # 4. Appliquer le downcast uniquement sur ces colonnes sécurisées
+        chunk[cols_to_downcast] = chunk[cols_to_downcast].astype('int32')
+        # --- FIN DE LA CORRECTION ---
         
         chunk_list.append(chunk)
         

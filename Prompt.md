@@ -9,7 +9,7 @@
 - **Input Nature:** Tabular network flows treated as Spatio-Temporal sequences.
 
 ## 2. Model Architecture
-- **Type:** Masked Transformer (Encoder-only, similar to BERT/ViT).
+- **Type:** Masked Transformer (Encoder-only, MAE).
 - **Task:** Masked Feature Modeling (MFM). The model must reconstruct masked network features from their spatio-temporal context.
 - **Goal:** Zero-Day Anomaly Detection. High reconstruction error at inference time indicates a Zero-Day (unseen) attack.
 

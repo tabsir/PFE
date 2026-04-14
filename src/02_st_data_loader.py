@@ -10,71 +10,84 @@ class SpatioTemporalNIDSDataset(Dataset):
         if not os.path.exists(arrow_dir_path):
             raise FileNotFoundError(f"Dataset introuvable à : {arrow_dir_path}")
         if not os.path.exists(stats_path):
-            raise FileNotFoundError(f"Fichier de statistiques introuvable à : {stats_path}. Exécute compute_stats.py d'abord.")
+            raise FileNotFoundError(f"Fichier de statistiques introuvable à : {stats_path}")
 
+        # 1. Chargement Mmap (Zéro RAM)
         self.data = load_from_disk(arrow_dir_path)
         self.seq_len = seq_len
         
-        # 1. Chargement des vecteurs de normalisation (Dépendance externe)
+        # 2. Chargement des vecteurs de normalisation
         with open(stats_path, "r") as f:
             stats = json.load(f)
             
-        self.cont_cols = stats["features"]
+        self.cont_cols = stats["features"] # Doit contenir 40 features
         self.mean = torch.tensor(stats["mean"], dtype=torch.float32)
         self.std = torch.tensor(stats["std"], dtype=torch.float32)
         
-        # 2. Définition stricte des autres colonnes
-        self.cat_cols = ['PROTOCOL', 'L4_DST_PORT', 'TCP_FLAGS', 'L4_SRC_PORT']
+        # 3. Définition stricte des 9 catégories NF-v3
+        self.cat_cols = [
+            'PROTOCOL', 'L7_PROTO', 'TCP_FLAGS', 'L4_SRC_PORT', 'L4_DST_PORT', 
+            'CLIENT_TCP_FLAGS', 'SERVER_TCP_FLAGS', 'ICMP_TYPE', 'ICMP_IPV4_TYPE'
+        ]
         self.label_col = 'Label'
+        self.attack_col = 'Attack' # Ajout utile pour l'évaluation future
+
+        # 4. Échantillonnage par blocs (Chunking) pour éviter l'explosion combinatoire
+        self.num_sequences = len(self.data) // self.seq_len
 
     def __len__(self):
-        return len(self.data) - self.seq_len
+        return self.num_sequences
 
     def __getitem__(self, idx):
-        window = self.data[idx : idx + self.seq_len]
+        # Indexation par blocs stricts (0-32, 32-64, etc.)
+        start_idx = idx * self.seq_len
+        end_idx = start_idx + self.seq_len
         
-        # 1. Extraction et sécurisation des données continues
-        # On force le type float64 pour gérer les éventuels 'None' qui deviennent des 'NaN'
+        window = self.data[start_idx : end_idx]
+        
+        # 1. Traitement des variables continues (40)
         cont_features = np.column_stack([
             np.array(window[col], dtype=np.float64) for col in self.cont_cols
         ])
-        
-        # 2. Nettoyage des NaNs (remplacement par 0.0)
         cont_features = np.nan_to_num(cont_features, nan=0.0, posinf=0.0, neginf=0.0)
         
-        # 3. Conversion en tenseur et normalisation
         cont_tensor = torch.tensor(cont_features, dtype=torch.float32)
         normalized_cont = (cont_tensor - self.mean) / self.std
         
-        # 4. Extraction et sécurisation des catégories
-        # On s'assure que les catégories sont bien des entiers (long)
+        # 2. Traitement des variables catégorielles (9)
         cat_features = np.column_stack([
             np.array(window[col], dtype=np.int64) for col in self.cat_cols
         ])
+        cat_tensor = torch.tensor(cat_features, dtype=torch.long)
         
-        # 5. Extraction de la cible finale
+        # 3. Label de la séquence (On prend le label du dernier paquet pour la classification)
         target_label = window[self.label_col][-1]
         
         return {
             'continuous': normalized_cont,
-            'categorical': torch.tensor(cat_features, dtype=torch.long),
+            'categorical': cat_tensor,
             'label': torch.tensor(target_label, dtype=torch.long)
         }
 
-# Test d'intégration complet et sans approximation
+# Test d'intégration
 if __name__ == "__main__":
-    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train"
+    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train" # À adapter selon ton arborescence
     STATS_PATH = "nids_normalization_stats.json"
     
     try:
         train_dataset = SpatioTemporalNIDSDataset(arrow_dir_path=TRAIN_PATH, stats_path=STATS_PATH, seq_len=32)
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True)
+        # pin_memory=True est crucial pour la vitesse de transfert CPU -> GPU
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
+        
+        print(f"Nombre total de séquences d'entraînement : {len(train_dataset)}")
         
         for batch in train_loader:
-            print(f"Batch Continuous Shape : {batch['continuous'].shape} (Attendu: [32, 32, 47])") 
-            print(f"Batch Categorical Shape: {batch['categorical'].shape} (Attendu: [32, 32, 4])") 
-            print(f"Batch Label Shape      : {batch['label'].shape} (Attendu: [32])")       
+            print("\n--- Analyse du premier Batch ---")
+            print(f"Continuous Tensor Shape : {batch['continuous'].shape} -> [Batch(128), SeqLen(32), Cont_Vars(40)]") 
+            print(f"Categorical Tensor Shape: {batch['categorical'].shape} -> [Batch(128), SeqLen(32), Cat_Vars(9)]") 
+            print(f"Label Tensor Shape      : {batch['label'].shape} -> [Batch(128)]")       
             break 
-        print("✅ DataLoader opérationnel et normalisation Z-Score appliquée.")
+            
+        print("\n✅ DataLoader opérationnel. Architecture Spatio-Temporelle validée.")
     except Exception as e:
         print(f"❌ Erreur lors de l'exécution : {e}")
