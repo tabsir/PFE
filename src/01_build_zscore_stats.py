@@ -13,9 +13,6 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
     
     all_cols = dataset.column_names
     
-    # --- LA CORRECTION EST ICI ---
-    # Liste unique et stricte de tout ce qui NE DOIT PAS être normalisé (Z-Score)
-    # On ajoute TOUTES les catégories trouvées dans ton JSON + les dates et IPs
     exclude_cols = [
         'FLOW_START_MILLISECONDS', 
         'FLOW_END_MILLISECONDS',
@@ -80,7 +77,7 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
     with open(output_file, "w") as f:
         json.dump(stats, f, indent=4)
         
-    print(f"✅ Statistiques globales générées et sauvegardées dans '{output_file}'.")
+    print(f" Statistiques globales générées et sauvegardées dans '{output_file}'.")
 
 if __name__ == "__main__":
     TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train" # Vérifie juste que ce chemin est bon chez toi

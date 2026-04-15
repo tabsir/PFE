@@ -47,7 +47,7 @@ def load_optimized_csv(file_path):
 # 1. Load Metadata
 # ==========================================
 print("1. Loading NetFlow v3 Feature Metadata...")
-metadata_path = '/mnt/c/Users/HP/Desktop/PFE/Downloads/NF-CSE-CIC-IDS-2018-v3/f78acbaa2afe1595_NFV3DATA-A11964_A11964/data/NetFlow_v3_Features.csv' 
+metadata_path = '/home/aka/PFE-code/init_datasets/NetFlow_v3_Features.csv'
 df_features = pd.read_csv(metadata_path)
 print(f"Total features defined: {df_features.shape[0]}\n")
 
@@ -55,8 +55,8 @@ print(f"Total features defined: {df_features.shape[0]}\n")
 # 2. Optimized Data Ingestion
 # ==========================================
 print("2. Initiating Memory-Optimized Data Stream from Windows...")
-cic_path  = '/mnt/c/Users/HP/Desktop/PFE/Downloads/NF-CSE-CIC-IDS-2018-v3/f78acbaa2afe1595_NFV3DATA-A11964_A11964/data/NF-CICIDS2018-v3.csv'
-unsw_path = '/mnt/c/Users/HP/Desktop/PFE/Downloads/NF-UNSW-NB15-v3/f7546561558c07c5_NFV3DATA-A11964_A11964/data/NF-UNSW-NB15-v3.csv'
+cic_path  ='/home/aka/PFE-code/init_datasets/NF-CICIDS2018-v3.csv'
+unsw_path = '/home/aka/PFE-code/init_datasets/UNSW-NB15-v3.csv'
 
 print("   -> Streaming CIC-IDS2018 (Canada) in chunks...")
 df_cic = load_optimized_csv(cic_path)
@@ -72,7 +72,6 @@ print(f"      [UNSW Loaded] Shape: {df_unsw.shape}")
 print("\n3. Executing Global Merge...")
 df_global = pd.concat([df_unsw, df_cic], ignore_index=True)
 
-# ⚠️ Forcibly destroy the old variables and run Garbage Collection
 del df_unsw
 del df_cic
 gc.collect()

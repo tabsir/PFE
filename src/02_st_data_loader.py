@@ -88,6 +88,6 @@ if __name__ == "__main__":
             print(f"Label Tensor Shape      : {batch['label'].shape} -> [Batch(128)]")       
             break 
             
-        print("\n✅ DataLoader opérationnel. Architecture Spatio-Temporelle validée.")
+        print("\n DataLoader opérationnel. Architecture Spatio-Temporelle validée.")
     except Exception as e:
-        print(f"❌ Erreur lors de l'exécution : {e}")
+        print(f" Erreur lors de l'exécution : {e}")

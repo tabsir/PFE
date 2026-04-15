@@ -83,9 +83,9 @@ def train_foundation():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        print(f"✅ Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
+        print(f" Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
     else:
-        print(f"🆕 Aucun checkpoint trouvé. Début d'un nouvel entraînement sur {DEVICE}.")
+        print(f" Aucun checkpoint trouvé. Début d'un nouvel entraînement sur {DEVICE}.")
 
     # --- 5. Boucle d'Entraînement Principale ---
     for epoch in range(start_epoch, EPOCHS):
@@ -137,7 +137,7 @@ def train_foundation():
             'loss': epoch_loss / len(train_loader),
         }, checkpoint_path)
         
-        print(f"✅ Epoch {epoch+1} complete. Loss: {epoch_loss/len(train_loader):.6f} | Checkpoint: {checkpoint_path}")
+        print(f" Epoch {epoch+1} complete. Loss: {epoch_loss/len(train_loader):.6f} | Checkpoint: {checkpoint_path}")
 
 if __name__ == "__main__":
     train_foundation()
