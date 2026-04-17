@@ -1,6 +1,6 @@
 
 import torch
-
+import math
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -8,7 +8,7 @@ from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 import os
 import glob
-import importlib
+import importlib 
 
 # 1. Chargement dynamique des modules
 st_data_loader = importlib.import_module("02_st_data_loader")
@@ -42,8 +42,8 @@ def train_foundation():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     EPOCHS = 50
     WARMUP_EPOCHS = 10
-    BATCH_SIZE = 32         
-    ACC_STEPS = 8           
+    BATCH_SIZE = 512       
+    ACC_STEPS = 1  # Gradient Accumulation Steps         
     LR = 1e-4
     SEQ_LEN = 32
     
@@ -54,11 +54,11 @@ def train_foundation():
 
     # --- 2. Initialisation des Données ---
     train_dataset = SpatioTemporalNIDSDataset(arrow_dir_path=TRAIN_DIR, stats_path=STATS_PATH, seq_len=SEQ_LEN)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=10, pin_memory=True)
 
     # --- 3. Initialisation du Modèle & Optimisation ---
     NUM_CONT = len(train_dataset.cont_cols)
-    CAT_VOCABS = [256, 65536, 256, 65536]   
+    CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]   
     
     model = SpatioTemporalTransformer(
         num_cont_features=NUM_CONT, 
@@ -69,8 +69,17 @@ def train_foundation():
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-    criterion = nn.MSELoss(reduction='none') 
-    scaler = GradScaler('cuda')
+    criterion = nn.MSELoss(reduction='none')
+    
+    # LR Scheduler: linear warmup then cosine decay
+    total_steps = EPOCHS * (len(train_dataset) // BATCH_SIZE + 1)
+    warmup_steps = WARMUP_EPOCHS * (len(train_dataset) // BATCH_SIZE + 1)
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(warmup_steps, 1)
+        progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+        return 0.5 * (1 + math.cos(math.pi * progress))
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     # --- 4. Logique de Reprise Automatique (Checkpointing) ---
     start_epoch = 0
@@ -81,7 +90,9 @@ def train_foundation():
         checkpoint = torch.load(last_cp, map_location=DEVICE)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        #scaler.load_state_dict(checkpoint['scaler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         print(f" Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
     else:
@@ -105,21 +116,23 @@ def train_foundation():
             cont = batch['continuous'].to(DEVICE, non_blocking=True)
             cat = batch['categorical'].to(DEVICE, non_blocking=True)
             
-            with autocast('cuda'):
-                reconstructed, spatial_mask = model(cont, cat)
-                raw_loss = criterion(reconstructed, cont)
-                masked_loss = raw_loss[spatial_mask.unsqueeze(-1).expand_as(raw_loss)].mean()
-                loss = masked_loss / ACC_STEPS
+            # 1. Plus de 'with autocast()', calcul direct en FP32
+            reconstructed, spatial_mask = model(cont, cat)
+            raw_loss = criterion(reconstructed, cont)
+            mask_expanded = spatial_mask.unsqueeze(-1)  # [B, S, 1]
+            masked_loss = (raw_loss * mask_expanded).sum() / mask_expanded.sum().clamp(min=1) / raw_loss.shape[-1]
+            loss = masked_loss / ACC_STEPS
 
-            scaler.scale(loss).backward()
+            # 2. Rétropropagation directe (Plus de scaler.scale)
+            loss.backward()
 
             if (i + 1) % ACC_STEPS == 0:
-                scaler.step(optimizer)
-                scaler.update()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad()
             
             epoch_loss += loss.item() * ACC_STEPS
-            
             if i % 10 == 0:
                 progress_bar.set_postfix({
                     "loss": f"{epoch_loss/(i+1):.4f}", 
@@ -133,11 +146,13 @@ def train_foundation():
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'scaler_state_dict': scaler.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'loss': epoch_loss / len(train_loader),
         }, checkpoint_path)
+        
         
         print(f" Epoch {epoch+1} complete. Loss: {epoch_loss/len(train_loader):.6f} | Checkpoint: {checkpoint_path}")
 
 if __name__ == "__main__":
     train_foundation()
+    

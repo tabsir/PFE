@@ -54,6 +54,9 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
         # Nettoyage des NaNs
         batch_matrix = np.nan_to_num(batch_matrix, nan=0.0, posinf=0.0, neginf=0.0)
         
+        # Log-transform to handle heavy-tailed network flow distributions
+        batch_matrix = np.sign(batch_matrix) * np.log1p(np.abs(batch_matrix))
+        
         sum_x += np.sum(batch_matrix, axis=0)
         sum_sq_x += np.sum(batch_matrix ** 2, axis=0)
         

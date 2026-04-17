@@ -2,7 +2,7 @@
 *.csv
 # Specific safety for the arrow files
 *.arrow
-
+*.pt
 # Ignore the generated Parquet and Arrow shards
 global_nids_matrix.parquet
 

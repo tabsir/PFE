@@ -51,6 +51,9 @@ class SpatioTemporalNIDSDataset(Dataset):
         ])
         cont_features = np.nan_to_num(cont_features, nan=0.0, posinf=0.0, neginf=0.0)
         
+        # Log-transform to handle heavy-tailed network flow distributions
+        cont_features = np.sign(cont_features) * np.log1p(np.abs(cont_features))
+        
         cont_tensor = torch.tensor(cont_features, dtype=torch.float32)
         normalized_cont = (cont_tensor - self.mean) / self.std
         

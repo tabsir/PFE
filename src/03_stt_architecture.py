@@ -22,8 +22,14 @@ class HybridEmbedding(nn.Module):
     def forward(self, cont_data, cat_data):
         x_cont = self.cont_proj(cont_data) # [Batch, Seq, d_model]
         
-        # Embeddings catégoriels
-        x_cats = [emb(cat_data[:, :, i]) for i, emb in enumerate(self.cat_embeddings)]
+        # Embeddings catégoriels avec SÉCURITÉ CUDA (Bouclier Anti-Crash)
+        x_cats = []
+        for i, emb in enumerate(self.cat_embeddings):
+            # torch.clamp force l'index mathématiquement entre 0 et vocab_size - 1
+            # Les nombres négatifs (NaN) deviennent 0 (Unknown)
+            # Les nombres trop grands (ex: 280) sont plafonnés au maximum autorisé
+            safe_cat = torch.clamp(cat_data[:, :, i], min=0, max=emb.num_embeddings - 1)
+            x_cats.append(emb(safe_cat))
         
         # Concaténation et réduction vers d_model
         x_fused = torch.cat([x_cont] + x_cats, dim=-1)
@@ -35,6 +41,8 @@ class FrequencyMaskingLayer(nn.Module):
         self.mask_ratio = mask_ratio
 
     def forward(self, x):
+        if not self.training:
+            return x
         # Domaine spectral
         x_freq = torch.fft.rfft(x, dim=1, norm='ortho')
         batch, freq_len, d_model = x_freq.shape
@@ -51,7 +59,7 @@ class SpatioTemporalTransformer(nn.Module):
         super().__init__()
         
         self.embedding = HybridEmbedding(num_cont_features, cat_vocab_sizes, d_model)
-        self.pos_encoder = nn.Parameter(torch.randn(1, seq_len, d_model))
+        self.pos_encoder = nn.Parameter(torch.randn(1, seq_len, d_model) * 0.02)
         self.mfm_layer = FrequencyMaskingLayer(mask_ratio=init_mfm)
         
         encoder_layer = nn.TransformerEncoderLayer(
@@ -60,7 +68,7 @@ class SpatioTemporalTransformer(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         
-        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
         self.mae_mask_ratio = init_mae
         
         self.decoder = nn.Sequential(
@@ -74,9 +82,12 @@ class SpatioTemporalTransformer(nn.Module):
         
         x = self.embedding(cont_data, cat_data)
         
-        # MAE (Masked Auto-Encoder) spatial
-        spatial_mask = torch.rand(batch_size, seq_len, device=x.device) < self.mae_mask_ratio
-        x[spatial_mask] = self.mask_token.to(dtype=x.dtype)
+        # MAE (Masked Auto-Encoder) spatial — only during training
+        if self.training:
+            spatial_mask = torch.rand(batch_size, seq_len, device=x.device) < self.mae_mask_ratio
+            x[spatial_mask] = self.mask_token.to(dtype=x.dtype)
+        else:
+            spatial_mask = torch.zeros(batch_size, seq_len, device=x.device, dtype=torch.bool)
         
         x = x + self.pos_encoder
         x = self.mfm_layer(x)
@@ -92,7 +103,7 @@ class SpatioTemporalTransformer(nn.Module):
 if __name__ == "__main__":
     # Paramètres synchronisés avec NF-v3
     BATCH_SIZE, SEQ_LEN = 128, 32
-    NUM_CONT = 40  # <--- Correction ici (ton JSON a 40 variables)
+    NUM_CONT = 40  # <--- Correction ci (ton JSON a 40 variables)
     
     # Vocabulaires pour tes 9 catégories
     # On met 65536 pour les ports et 256 pour les protocoles/flags pour être safe
