@@ -17,17 +17,41 @@ stt_architecture = importlib.import_module("03_stt_architecture")
 SpatioTemporalNIDSDataset = st_data_loader.SpatioTemporalNIDSDataset
 SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 
-def get_progressive_ratios(epoch, warmup_epochs=10, 
-                           start_mae=0.15, target_mae=0.40, 
-                           start_mfm=0.05, target_mfm=0.15):
-    """Calcule l'augmentation de la difficulté pour le Curriculum Learning."""
-    if epoch < warmup_epochs:
-        progress = epoch / warmup_epochs
-        current_mae = start_mae + progress * (target_mae - start_mae)
-        current_mfm = start_mfm + progress * (target_mfm - start_mfm)
+# def get_progressive_ratios(epoch):
+  #  if epoch == 0:
+   #      return 0.15, 0.00       # Phase 1: spatial only
+   #  elif 1 <= epoch <= 5:
+   #      return 0.15, 0.05       # Phase 2: introduce MFM gently
+   #  elif 6 <= epoch < 15:
+   #      progress = (epoch - 5) / (15 - 5)
+   #      current_mae = 0.15 + progress * (0.40 - 0.15)
+    #     current_mfm = 0.05 + progress * (0.15 - 0.05)
+   #      return current_mae, current_mfm
+    # else:
+       #  return 0.40, 0.15  
+def get_progressive_ratios(epoch):
+    """
+    Curriculum Learning par Paliers (Staged Curriculum)
+    Conçu pour éviter le Mean Collapse sur les données réseau (Heavy-Tail).
+    """
+    if epoch < 3:
+        # Phase 1 : Stabilisation des embeddings (masquage léger, pas de MFM)
+        return 0.15, 0.00
+
+    elif epoch < 8:
+        # Phase 2 : Masquage spatial modéré, introduction douce du MFM
+        return 0.25, 0.05
+
+    elif epoch < 15:
+        # Phase 3 : Ramp-up progressif vers la difficulté maximale
+        progress = (epoch - 8) / (15 - 8)
+        mae = 0.25 + progress * (0.40 - 0.25)
+        mfm = 0.05 + progress * (0.15 - 0.05)
+        return mae, mfm
+
     else:
-        current_mae, current_mfm = target_mae, target_mfm
-    return current_mae, current_mfm
+        # Phase 4 (Époque 15 à 50) : Difficulté maximale
+        return 0.40, 0.15
 
 def get_last_checkpoint(checkpoint_dir):
     """Recherche le fichier .pt avec l'époque la plus élevée pour reprendre l'entraînement."""
@@ -41,7 +65,8 @@ def train_foundation():
     # --- 1. Configuration & Hyperparamètres ---
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     EPOCHS = 50
-    WARMUP_EPOCHS = 10
+       # Curriculum phases (masking ramp-up)
+    LR_WARMUP_EPOCHS = 1    # LR warmup (separate from curriculum)
     BATCH_SIZE = 512       
     ACC_STEPS = 1  # Gradient Accumulation Steps         
     LR = 5e-4
@@ -64,16 +89,16 @@ def train_foundation():
         num_cont_features=NUM_CONT, 
         cat_vocab_sizes=CAT_VOCABS,
         seq_len=SEQ_LEN,
-        init_mae=0.15, 
-        init_mfm=0.05
+        init_mae=0.30, 
+        init_mfm=0.00
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     criterion = nn.MSELoss(reduction='none')
     
-    # LR Scheduler: linear warmup then cosine decay
+    # LR Scheduler: linear warmup (3 epochs) then cosine decay
     total_steps = EPOCHS * (len(train_dataset) // BATCH_SIZE + 1)
-    warmup_steps = WARMUP_EPOCHS * (len(train_dataset) // BATCH_SIZE + 1)
+    warmup_steps = LR_WARMUP_EPOCHS * (len(train_dataset) // BATCH_SIZE + 1)
     def lr_lambda(step):
         if step < warmup_steps:
             return step / max(warmup_steps, 1)
@@ -103,9 +128,10 @@ def train_foundation():
         model.train()
         
         # Application du Curriculum Learning (Manquant dans le code 2, rajouté ici)
-        mae_r, mfm_r = get_progressive_ratios(epoch, WARMUP_EPOCHS)
+        mae_r, mfm_r = get_progressive_ratios(epoch)
         model.mae_mask_ratio = mae_r
         model.mfm_layer.mask_ratio = mfm_r
+        
         
         epoch_loss = 0
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{EPOCHS}")
@@ -119,9 +145,12 @@ def train_foundation():
             # 1. Plus de 'with autocast()', calcul direct en FP32
             reconstructed, spatial_mask = model(cont, cat)
             raw_loss = criterion(reconstructed, cont)
-            mask_expanded = spatial_mask.unsqueeze(-1)  # [B, S, 1]
-            masked_loss = (raw_loss * mask_expanded).sum() / mask_expanded.sum().clamp(min=1) / raw_loss.shape[-1]
-            loss = masked_loss / ACC_STEPS
+            
+            # Hybrid loss: masked reconstruction + full reconstruction for gradient bootstrapping
+            mask_expanded = spatial_mask.unsqueeze(-1).float()  # [B, S, 1]
+            masked_loss = (raw_loss * mask_expanded).sum() / mask_expanded.sum().clamp(min=1.0) / raw_loss.shape[-1]
+            full_loss = raw_loss.mean()
+            loss = (0.7 * masked_loss + 0.3 * full_loss) / ACC_STEPS
 
             # 2. Rétropropagation directe (Plus de scaler.scale)
             loss.backward()

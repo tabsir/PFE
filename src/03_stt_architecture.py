@@ -105,7 +105,7 @@ class SpatioTemporalTransformer(nn.Module):
 # ==========================================
 if __name__ == "__main__":
     # Paramètres synchronisés avec NF-v3
-    BATCH_SIZE, SEQ_LEN = 128, 32
+    BATCH_SIZE, SEQ_LEN = 512, 32
     NUM_CONT = 40  # <--- Correction ci (ton JSON a 40 variables)
     
     # Vocabulaires pour tes 9 catégories
@@ -116,7 +116,7 @@ if __name__ == "__main__":
         num_cont_features=NUM_CONT,
         cat_vocab_sizes=CAT_VOCABS,
         init_mae=0.30,
-        init_mfm=0.10
+        init_mfm=0.00
     )
 
     dummy_cont = torch.randn(BATCH_SIZE, SEQ_LEN, NUM_CONT)
