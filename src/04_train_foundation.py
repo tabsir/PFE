@@ -18,8 +18,8 @@ SpatioTemporalNIDSDataset = st_data_loader.SpatioTemporalNIDSDataset
 SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 
 def get_progressive_ratios(epoch, warmup_epochs=10, 
-                           start_mae=0.3, target_mae=0.7, 
-                           start_mfm=0.1, target_mfm=0.4):
+                           start_mae=0.15, target_mae=0.40, 
+                           start_mfm=0.05, target_mfm=0.15):
     """Calcule l'augmentation de la difficulté pour le Curriculum Learning."""
     if epoch < warmup_epochs:
         progress = epoch / warmup_epochs
@@ -44,7 +44,7 @@ def train_foundation():
     WARMUP_EPOCHS = 10
     BATCH_SIZE = 512       
     ACC_STEPS = 1  # Gradient Accumulation Steps         
-    LR = 1e-4
+    LR = 5e-4
     SEQ_LEN = 32
     
     TRAIN_DIR = "/home/aka/PFE-code/data/nids_transformer_split/train"
@@ -64,8 +64,8 @@ def train_foundation():
         num_cont_features=NUM_CONT, 
         cat_vocab_sizes=CAT_VOCABS,
         seq_len=SEQ_LEN,
-        init_mae=0.3, 
-        init_mfm=0.1
+        init_mae=0.15, 
+        init_mfm=0.05
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)

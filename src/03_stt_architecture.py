@@ -64,11 +64,14 @@ class SpatioTemporalTransformer(nn.Module):
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=n_heads, dim_feedforward=d_model*4,
-            dropout=0.1, batch_first=True
+            dropout=0.1, batch_first=True, norm_first=True  # Pre-LN for stable gradients
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=n_layers,
+            norm=nn.LayerNorm(d_model)  # Final LayerNorm prevents gradient vanishing
+        )
         
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.mask_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)  # Small random init, not zeros
         self.mae_mask_ratio = init_mae
         
         self.decoder = nn.Sequential(

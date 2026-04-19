@@ -1,6 +1,5 @@
-# Ignore raw CSVs
+# Ignore model checkpoints and intermediate files
 *.csv
-# Specific safety for the arrow files
 *.arrow
 *.pt
 # Ignore the generated Parquet and Arrow shards
