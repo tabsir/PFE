@@ -40,9 +40,13 @@ class FrequencyMaskingLayer(nn.Module):
         super().__init__()
         self.mask_ratio = mask_ratio
 
-    def forward(self, x):
-        if not self.training:
+    def forward(self, x, apply_mask=None):
+        if apply_mask is None:
+            apply_mask = self.training
+
+        if not apply_mask or self.mask_ratio <= 0:
             return x
+
         # Domaine spectral
         x_freq = torch.fft.rfft(x, dim=1, norm='ortho')
         batch, freq_len, d_model = x_freq.shape
@@ -57,6 +61,7 @@ class FrequencyMaskingLayer(nn.Module):
 class SpatioTemporalTransformer(nn.Module):
     def __init__(self, num_cont_features, cat_vocab_sizes, seq_len=32, d_model=256, n_heads=8, n_layers=4, init_mae=0.30, init_mfm=0.10):
         super().__init__()
+        self.d_model = d_model
         
         self.embedding = HybridEmbedding(num_cont_features, cat_vocab_sizes, d_model)
         self.pos_encoder = nn.Parameter(torch.randn(1, seq_len, d_model) * 0.02)
@@ -80,25 +85,137 @@ class SpatioTemporalTransformer(nn.Module):
             nn.Linear(d_model // 2, num_cont_features)
         )
 
-    def forward(self, cont_data, cat_data):
+    def encode_features(self, cont_data, cat_data, spatial_mask=None, apply_mfm=None):
         batch_size, seq_len, _ = cont_data.shape
-        
+
         x = self.embedding(cont_data, cat_data)
-        
-        # MAE (Masked Auto-Encoder) spatial — only during training
-        if self.training:
+
+        # MAE (Masked Auto-Encoder) spatial — explicit mask support for validation without dropout.
+        if spatial_mask is None and self.training:
             spatial_mask = torch.rand(batch_size, seq_len, device=x.device) < self.mae_mask_ratio
-            x[spatial_mask] = self.mask_token.to(dtype=x.dtype)
-        else:
+        elif spatial_mask is None:
             spatial_mask = torch.zeros(batch_size, seq_len, device=x.device, dtype=torch.bool)
-        
-        x = x + self.pos_encoder
-        x = self.mfm_layer(x)
-        
+        else:
+            spatial_mask = spatial_mask.to(device=x.device, dtype=torch.bool)
+
+        if spatial_mask.any():
+            x = x.clone()
+            x[spatial_mask] = self.mask_token[0, 0].to(dtype=x.dtype)
+
+        x = x + self.pos_encoder[:, :seq_len]
+        x = self.mfm_layer(x, apply_mask=apply_mfm)
         encoded_features = self.encoder(x)
+        return encoded_features, spatial_mask
+
+    def forward(self, cont_data, cat_data, spatial_mask=None, apply_mfm=None):
+        encoded_features, spatial_mask = self.encode_features(
+            cont_data,
+            cat_data,
+            spatial_mask=spatial_mask,
+            apply_mfm=apply_mfm,
+        )
         reconstructed_cont = self.decoder(encoded_features)
         
         return reconstructed_cont, spatial_mask
+
+
+class NIDSMultiTaskModel(nn.Module):
+    def __init__(self, backbone, num_known_attack_classes, dropout=0.10):
+        super().__init__()
+        self.backbone = backbone
+        self.num_known_attack_classes = num_known_attack_classes
+
+        pooled_dim = backbone.d_model * 2
+        self.pool_norm = nn.LayerNorm(pooled_dim)
+        self.shared_projection = nn.Sequential(
+            nn.Linear(pooled_dim, backbone.d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+        self.current_attack_head = nn.Linear(backbone.d_model, 1)
+        self.future_attack_head = nn.Linear(backbone.d_model, 1)
+        self.attack_family_head = (
+            nn.Linear(backbone.d_model, num_known_attack_classes)
+            if num_known_attack_classes > 0
+            else None
+        )
+
+    def pool_encoded_features(self, encoded_features):
+        mean_pool = encoded_features.mean(dim=1)
+        max_pool = encoded_features.max(dim=1).values
+        pooled = torch.cat([mean_pool, max_pool], dim=-1)
+        pooled = self.pool_norm(pooled)
+        return self.shared_projection(pooled)
+
+    def forward(self, cont_data, cat_data, apply_mfm=False):
+        spatial_mask = torch.zeros(
+            cont_data.shape[0],
+            cont_data.shape[1],
+            device=cont_data.device,
+            dtype=torch.bool,
+        )
+        encoded_features, _ = self.backbone.encode_features(
+            cont_data,
+            cat_data,
+            spatial_mask=spatial_mask,
+            apply_mfm=apply_mfm,
+        )
+        pooled_features = self.pool_encoded_features(encoded_features)
+
+        outputs = {
+            'current_attack_logits': self.current_attack_head(pooled_features).squeeze(-1),
+            'future_attack_logits': self.future_attack_head(pooled_features).squeeze(-1),
+            'pooled_features': pooled_features,
+        }
+
+        if self.attack_family_head is not None:
+            outputs['attack_family_logits'] = self.attack_family_head(pooled_features)
+        else:
+            outputs['attack_family_logits'] = None
+
+        return outputs
+
+    @staticmethod
+    def decode_predictions(outputs, attack_labels, current_threshold=0.50, known_attack_threshold=0.55, future_threshold=0.50):
+        current_probs = torch.sigmoid(outputs['current_attack_logits']).detach().cpu()
+        future_probs = torch.sigmoid(outputs['future_attack_logits']).detach().cpu()
+
+        if outputs.get('attack_family_logits') is not None:
+            family_probs = torch.softmax(outputs['attack_family_logits'], dim=-1).detach().cpu()
+            known_confidence, known_index = family_probs.max(dim=-1)
+        else:
+            batch_size = current_probs.shape[0]
+            family_probs = None
+            known_confidence = torch.zeros(batch_size)
+            known_index = torch.zeros(batch_size, dtype=torch.long)
+
+        decoded = []
+        for idx in range(current_probs.shape[0]):
+            current_prob = float(current_probs[idx])
+            future_prob = float(future_probs[idx])
+            known_conf = float(known_confidence[idx])
+            sample = {
+                'current_attack_probability': current_prob,
+                'future_attack_probability': future_prob,
+                'future_warning': future_prob >= future_threshold,
+            }
+
+            if current_prob < current_threshold:
+                sample['status'] = 'benign'
+                sample['attack_type'] = 'Benign'
+            elif family_probs is not None and known_conf >= known_attack_threshold and attack_labels:
+                attack_idx = int(known_index[idx])
+                sample['status'] = 'known_attack'
+                sample['attack_type'] = attack_labels[attack_idx]
+                sample['known_attack_confidence'] = known_conf
+            else:
+                sample['status'] = 'unknown_attack_warning'
+                sample['attack_type'] = 'Unknown'
+                sample['known_attack_confidence'] = known_conf
+
+            decoded.append(sample)
+
+        return decoded
 
 # ==========================================
 # Test d'intégration locale (Corrigé)

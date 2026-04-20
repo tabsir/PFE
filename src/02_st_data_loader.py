@@ -5,8 +5,9 @@ import numpy as np
 import json
 import os
 
+
 class SpatioTemporalNIDSDataset(Dataset):
-    def __init__(self, arrow_dir_path, stats_path="nids_normalization_stats.json", seq_len=32):
+    def __init__(self, arrow_dir_path, stats_path="nids_normalization_stats.json", seq_len=32, stride=None, clip_value=5.0):
         if not os.path.exists(arrow_dir_path):
             raise FileNotFoundError(f"Dataset introuvable à : {arrow_dir_path}")
         if not os.path.exists(stats_path):
@@ -15,6 +16,12 @@ class SpatioTemporalNIDSDataset(Dataset):
         # 1. Chargement Mmap (Zéro RAM)
         self.data = load_from_disk(arrow_dir_path)
         self.seq_len = seq_len
+        self.stride = stride or seq_len
+        self.clip_value = clip_value
+        self.sequence_cache_path = os.path.join(
+            arrow_dir_path,
+            f"sequence_ranges_seq{self.seq_len}_stride{self.stride}.npy"
+        )
         
         # 2. Chargement des vecteurs de normalisation
         with open(stats_path, "r") as f:
@@ -31,17 +38,72 @@ class SpatioTemporalNIDSDataset(Dataset):
         ]
         self.label_col = 'Label'
         self.attack_col = 'Attack' # Ajout utile pour l'évaluation future
+        self.group_col = 'sequence_group_id' if 'sequence_group_id' in self.data.column_names else None
+        self.start_time_col = 'FLOW_START_MILLISECONDS'
+        self.end_time_col = 'FLOW_END_MILLISECONDS'
 
-        # 4. Échantillonnage par blocs (Chunking) pour éviter l'explosion combinatoire
-        self.num_sequences = len(self.data) // self.seq_len
+        # 4. Construction de fenêtres cohérentes sans traverser les groupes temporels
+        self.sequence_ranges = self._load_or_build_sequence_ranges()
+        self.num_sequences = len(self.sequence_ranges)
+
+    def _load_or_build_sequence_ranges(self):
+        if os.path.exists(self.sequence_cache_path):
+            return np.load(self.sequence_cache_path)
+
+        sequence_ranges = np.asarray(self._build_sequence_ranges(), dtype=np.int64)
+        np.save(self.sequence_cache_path, sequence_ranges)
+        return sequence_ranges
+
+    def _expand_group_ranges(self, group_start, group_end):
+        group_length = group_end - group_start
+        if group_length < self.seq_len:
+            return []
+
+        max_start = group_end - self.seq_len + 1
+        return [
+            (start_idx, start_idx + self.seq_len)
+            for start_idx in range(group_start, max_start, self.stride)
+        ]
+
+    def _build_sequence_ranges(self, scan_batch_size=1_000_000):
+        if self.group_col is None:
+            return [
+                (start_idx, start_idx + self.seq_len)
+                for start_idx in range(0, len(self.data) - self.seq_len + 1, self.stride)
+            ]
+
+        sequence_ranges = []
+        current_group_start = 0
+        previous_last_group = None
+
+        for batch_start in range(0, len(self.data), scan_batch_size):
+            batch_end = min(batch_start + scan_batch_size, len(self.data))
+            group_batch = np.asarray(self.data[batch_start:batch_end][self.group_col], dtype=np.uint64)
+            if group_batch.size == 0:
+                continue
+
+            if previous_last_group is not None and group_batch[0] != previous_last_group:
+                sequence_ranges.extend(self._expand_group_ranges(current_group_start, batch_start))
+                current_group_start = batch_start
+
+            change_offsets = np.flatnonzero(group_batch[1:] != group_batch[:-1]) + 1
+            for change_offset in change_offsets:
+                group_end = batch_start + int(change_offset)
+                sequence_ranges.extend(self._expand_group_ranges(current_group_start, group_end))
+                current_group_start = group_end
+
+            previous_last_group = group_batch[-1]
+
+        if previous_last_group is not None:
+            sequence_ranges.extend(self._expand_group_ranges(current_group_start, len(self.data)))
+
+        return sequence_ranges
 
     def __len__(self):
         return self.num_sequences
 
     def __getitem__(self, idx):
-        # Indexation par blocs stricts (0-32, 32-64, etc.)
-        start_idx = idx * self.seq_len
-        end_idx = start_idx + self.seq_len
+        start_idx, end_idx = self.sequence_ranges[idx].tolist()
         
         window = self.data[start_idx : end_idx]
         
@@ -56,6 +118,7 @@ class SpatioTemporalNIDSDataset(Dataset):
         
         cont_tensor = torch.tensor(cont_features, dtype=torch.float32)
         normalized_cont = (cont_tensor - self.mean) / self.std
+        normalized_cont = torch.clamp(normalized_cont, min=-self.clip_value, max=self.clip_value)
         
         # 2. Traitement des variables catégorielles (9)
         cat_features = np.column_stack([
@@ -63,13 +126,20 @@ class SpatioTemporalNIDSDataset(Dataset):
         ])
         cat_tensor = torch.tensor(cat_features, dtype=torch.long)
         
-        # 3. Label de la séquence (On prend le label du dernier paquet pour la classification)
-        target_label = window[self.label_col][-1]
+        # 3. Label de séquence pour le NIDS: si une attaque apparaît dans la fenêtre, la séquence est malveillante.
+        window_labels = np.array(window[self.label_col], dtype=np.int64)
+        target_label = int(window_labels.max())
+        attack_names = list(window[self.attack_col])
+        active_attacks = [name for name, label in zip(attack_names, window_labels) if label != 0 and name != 'Benign']
+        target_attack = active_attacks[-1] if active_attacks else 'Benign'
         
         return {
             'continuous': normalized_cont,
             'categorical': cat_tensor,
-            'label': torch.tensor(target_label, dtype=torch.long)
+            'label': torch.tensor(target_label, dtype=torch.long),
+            'attack': target_attack,
+            'start_time': torch.tensor(window[self.start_time_col][0], dtype=torch.long),
+            'end_time': torch.tensor(window[self.end_time_col][-1], dtype=torch.long)
         }
 
 # Test d'intégration
@@ -88,7 +158,8 @@ if __name__ == "__main__":
             print("\n--- Analyse du premier Batch ---")
             print(f"Continuous Tensor Shape : {batch['continuous'].shape} -> [Batch(128), SeqLen(32), Cont_Vars(40)]") 
             print(f"Categorical Tensor Shape: {batch['categorical'].shape} -> [Batch(128), SeqLen(32), Cat_Vars(9)]") 
-            print(f"Label Tensor Shape      : {batch['label'].shape} -> [Batch(128)]")       
+            print(f"Label Tensor Shape      : {batch['label'].shape} -> [Batch(128)]")
+            print(f"Attack Example          : {batch['attack'][0]}")
             break 
             
         print("\n DataLoader opérationnel. Architecture Spatio-Temporelle validée.")

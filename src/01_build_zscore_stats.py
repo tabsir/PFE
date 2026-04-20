@@ -18,6 +18,8 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
         'FLOW_END_MILLISECONDS',
         'IPV4_SRC_ADDR', 
         'IPV4_DST_ADDR',
+        'DATASET_SOURCE',
+        'sequence_group_id',
         'Label', 
         'Attack',
         'PROTOCOL', 
