@@ -295,7 +295,7 @@ class DownstreamNIDSDataset(Dataset):
         row_end_times = self._load_numeric_column(self.base_dataset.end_time_col, row_limit, np.int64)
 
         if self.base_dataset.group_col is not None:
-            row_group_ids = self._load_numeric_column(self.base_dataset.group_col, row_limit, np.int64)
+            row_group_ids = self._load_numeric_column(self.base_dataset.group_col, row_limit, np.uint64)
         else:
             row_group_ids = None
 
@@ -306,7 +306,7 @@ class DownstreamNIDSDataset(Dataset):
         sequence_attack_ids = np.zeros(num_sequences, dtype=np.int16)
         sequence_start_times = np.zeros(num_sequences, dtype=np.int64)
         sequence_end_times = np.zeros(num_sequences, dtype=np.int64)
-        sequence_group_ids = np.zeros(num_sequences, dtype=np.int64)
+        sequence_group_ids = np.zeros(num_sequences, dtype=np.uint64)
 
         for idx, (start_idx, end_idx) in enumerate(tqdm(self.sequence_ranges, desc="Building downstream targets")):
             start_idx = int(start_idx)
