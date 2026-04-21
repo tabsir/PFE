@@ -529,14 +529,14 @@ def train_multitask_nids():
 
     train_dir = "/home/aka/PFE-code/data/nids_transformer_split/train"
     valid_dir = "/home/aka/PFE-code/data/nids_transformer_split/validation"
-    fallback_valid_dir = "/home/aka/PFE-code/data/nids_transformer_split/test"
+    TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
     stats_path = "nids_normalization_stats.json"
     checkpoint_dir = "/home/aka/PFE-code/checkpoints/nids_multitask"
     foundation_checkpoint = "/home/aka/PFE-code/checkpoints/stt_best.pt"
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    validation_path = valid_dir if os.path.exists(valid_dir) else fallback_valid_dir
-    if validation_path == fallback_valid_dir:
+    validation_path = valid_dir if os.path.exists(valid_dir) else TEST_DIR
+    if validation_path == TEST_DIR:
         print("Validation split introuvable. Utilisation temporaire du split test comme validation downstream.")
 
     train_base_dataset = SpatioTemporalNIDSDataset(

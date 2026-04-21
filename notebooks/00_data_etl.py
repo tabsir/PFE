@@ -26,6 +26,7 @@ CSV_CHUNK_SIZE = int(os.environ.get('NIDS_ETL_CHUNK_SIZE', '100000'))
 SORT_BUCKET_COUNT = int(os.environ.get('NIDS_ETL_SORT_BUCKETS', '128'))
 SQLITE_BATCH_SIZE = int(os.environ.get('NIDS_ETL_SQLITE_BATCH', '5000'))
 MAX_CHUNKS_PER_FILE = int(os.environ.get('NIDS_ETL_MAX_CHUNKS', '0'))
+RESUME_FROM_TEMP = os.environ.get('NIDS_ETL_RESUME', '0') == '1'
 
 
 def build_sequence_group_ids(df):
@@ -82,6 +83,10 @@ def downcast_chunk(chunk):
 
 def format_group_id_key(group_id_value):
     return f'{int(group_id_value):016x}'
+
+
+def list_raw_shard_paths(raw_shard_dir):
+    return sorted(glob.glob(os.path.join(raw_shard_dir, 'raw_*.parquet')))
 
 
 def create_group_tracking_db(db_path):
@@ -143,49 +148,60 @@ def compute_split_boundaries(total_groups, train_ratio=0.70, validation_ratio=0.
     return train_cutoff, validation_cutoff
 
 
+def ensure_group_first_seen_ordering_index(conn):
+    conn.execute(
+        '''
+        CREATE INDEX IF NOT EXISTS idx_group_first_seen_ordering
+        ON group_first_seen (first_seen, sequence_group_id)
+        '''
+    )
+    conn.commit()
+
+
 def assign_group_splits(conn, train_ratio=0.70, validation_ratio=0.15):
     total_groups = conn.execute('SELECT COUNT(*) FROM group_first_seen').fetchone()[0]
     if total_groups < 3:
         raise RuntimeError('At least three sequence groups are required to build train/validation/test splits.')
 
     train_cutoff, validation_cutoff = compute_split_boundaries(total_groups, train_ratio, validation_ratio)
-    conn.execute('DELETE FROM group_splits')
+    print('   -> building chronological index for group ordering...')
+    ensure_group_first_seen_ordering_index(conn)
 
-    insert_batch = []
-    split_counts = {'train': 0, 'validation': 0, 'test': 0}
-    ordered_groups = conn.execute(
-        '''
-        SELECT sequence_group_id
-        FROM group_first_seen
-        ORDER BY first_seen, sequence_group_id
-        '''
-    )
-
-    for group_index, (group_id_key,) in enumerate(ordered_groups):
-        if group_index < train_cutoff:
-            split_name = 'train'
-        elif group_index < validation_cutoff:
-            split_name = 'validation'
-        else:
-            split_name = 'test'
-
-        insert_batch.append((group_id_key, split_name))
-        split_counts[split_name] += 1
-
-        if len(insert_batch) >= SQLITE_BATCH_SIZE:
-            conn.executemany(
-                'INSERT INTO group_splits (sequence_group_id, split_name) VALUES (?, ?)',
-                insert_batch,
+    print('   -> assigning group splits inside SQLite...')
+    conn.execute('BEGIN IMMEDIATE')
+    try:
+        conn.execute('DELETE FROM group_splits')
+        conn.execute(
+            '''
+            INSERT INTO group_splits (sequence_group_id, split_name)
+            WITH ordered_groups AS (
+                SELECT
+                    sequence_group_id,
+                    ROW_NUMBER() OVER (
+                        ORDER BY first_seen, sequence_group_id
+                    ) AS group_rank
+                FROM group_first_seen
             )
-            conn.commit()
-            insert_batch.clear()
-
-    if insert_batch:
-        conn.executemany(
-            'INSERT INTO group_splits (sequence_group_id, split_name) VALUES (?, ?)',
-            insert_batch,
+            SELECT
+                sequence_group_id,
+                CASE
+                    WHEN group_rank <= ? THEN 'train'
+                    WHEN group_rank <= ? THEN 'validation'
+                    ELSE 'test'
+                END AS split_name
+            FROM ordered_groups
+            ''',
+            (train_cutoff, validation_cutoff),
         )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    split_counts = {'train': 0, 'validation': 0, 'test': 0}
+    split_counts.update(
+        dict(conn.execute('SELECT split_name, COUNT(*) FROM group_splits GROUP BY split_name').fetchall())
+    )
 
     print(f"   -> group split counts: {split_counts}")
 
@@ -315,20 +331,41 @@ def build_transformer_dataset():
     print(f"Total features defined: {df_features.shape[0]}\n")
 
     print('2. Initiating Disk-Backed Data Stream...')
-    ensure_clean_dir(TEMP_DIR)
-    os.makedirs(RAW_SHARD_DIR, exist_ok=True)
-    os.makedirs(BUCKET_PART_DIR, exist_ok=True)
-
     cic_path = os.path.join(BASE_DIR, 'init_datasets', 'NF-CICIDS2018-v3.csv')
     unsw_path = os.path.join(BASE_DIR, 'init_datasets', 'NF-UNSW-NB15-v3.csv')
 
+    resume_from_temp = (
+        RESUME_FROM_TEMP
+        and os.path.exists(GROUP_DB_PATH)
+        and os.path.isdir(RAW_SHARD_DIR)
+    )
+
+    if resume_from_temp:
+        os.makedirs(TEMP_DIR, exist_ok=True)
+        os.makedirs(RAW_SHARD_DIR, exist_ok=True)
+        ensure_clean_dir(BUCKET_PART_DIR)
+        raw_shard_paths = list_raw_shard_paths(RAW_SHARD_DIR)
+        if not raw_shard_paths:
+            raise RuntimeError('Resume requested, but no raw shard parquet files were found in the ETL temp directory.')
+
+        print(
+            f"   -> Resuming from existing temp artifacts with {len(raw_shard_paths):,} raw shards."
+        )
+    else:
+        ensure_clean_dir(TEMP_DIR)
+        os.makedirs(RAW_SHARD_DIR, exist_ok=True)
+        os.makedirs(BUCKET_PART_DIR, exist_ok=True)
+
     conn = create_group_tracking_db(GROUP_DB_PATH)
     try:
-        print('   -> Streaming CIC-IDS2018 (Canada) in chunks...')
-        raw_shard_paths = process_source_csv(cic_path, 'NF-CICIDS2018-v3', RAW_SHARD_DIR, conn)
+        if resume_from_temp:
+            print('   -> Skipping CSV ingestion because NIDS_ETL_RESUME=1.')
+        else:
+            print('   -> Streaming CIC-IDS2018 (Canada) in chunks...')
+            raw_shard_paths = process_source_csv(cic_path, 'NF-CICIDS2018-v3', RAW_SHARD_DIR, conn)
 
-        print('   -> Streaming UNSW-NB15 (Australia) in chunks...')
-        raw_shard_paths.extend(process_source_csv(unsw_path, 'NF-UNSW-NB15-v3', RAW_SHARD_DIR, conn))
+            print('   -> Streaming UNSW-NB15 (Australia) in chunks...')
+            raw_shard_paths.extend(process_source_csv(unsw_path, 'NF-UNSW-NB15-v3', RAW_SHARD_DIR, conn))
 
         print('\n3. Computing chronological group split assignments...')
         assign_group_splits(conn)

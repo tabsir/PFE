@@ -190,14 +190,14 @@ def train_foundation():
     
     TRAIN_DIR = "/home/aka/PFE-code/data/nids_transformer_split/train"
     VALID_DIR = "/home/aka/PFE-code/data/nids_transformer_split/validation"
-    FALLBACK_VALID_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
+    TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
     STATS_PATH = "nids_normalization_stats.json"
     CHECKPOINT_DIR = "./checkpoints"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # --- 2. Initialisation des Données ---
-    validation_path = VALID_DIR if os.path.exists(VALID_DIR) else FALLBACK_VALID_DIR
-    if validation_path == FALLBACK_VALID_DIR:
+    validation_path = VALID_DIR if os.path.exists(VALID_DIR) else TEST_DIR
+    if validation_path == TEST_DIR:
         print('Validation split introuvable. Utilisation temporaire du split test comme validation.')
 
     train_dataset = SpatioTemporalNIDSDataset(
