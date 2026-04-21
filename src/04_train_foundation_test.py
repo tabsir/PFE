@@ -1,4 +1,3 @@
-
 import torch
 import math
 import torch.nn as nn
@@ -8,9 +7,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import os
 import glob
-import importlib 
+import importlib
 import numpy as np
 from pathlib import Path
+
 
 # 1. Chargement dynamique des modules
 def load_local_module(module_name, filename):
@@ -27,21 +27,10 @@ stt_architecture = load_local_module("stt_architecture", "03_stt_architecture.py
 SpatioTemporalNIDSDataset = st_data_loader.SpatioTemporalNIDSDataset
 SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 
-# def get_progressive_ratios(epoch):
-  #  if epoch == 0:
-   #      return 0.15, 0.00       # Phase 1: spatial only
-   #  elif 1 <= epoch <= 5:
-   #      return 0.15, 0.05       # Phase 2: introduce MFM gently
-   #  elif 6 <= epoch < 15:
-   #      progress = (epoch - 5) / (15 - 5)
-   #      current_mae = 0.15 + progress * (0.40 - 0.15)
-    #     current_mfm = 0.05 + progress * (0.15 - 0.05)
-   #      return current_mae, current_mfm
-    # else:
-       #  return 0.40, 0.15  
+
 def get_progressive_ratios(epoch):
     """
-    Curriculum progressif pour stabiliser l'auto-encodage avant de durcir le masquage.
+    Variante plus agressive mais progressive pour comparer un masquage final plus fort.
     """
     if epoch < 5:
         return 0.10, 0.00
@@ -54,14 +43,15 @@ def get_progressive_ratios(epoch):
 
     if epoch < 30:
         progress = (epoch - 15) / 15
-        mae = 0.20 + progress * (0.30 - 0.20)
-        mfm = 0.03 + progress * (0.08 - 0.03)
+        mae = 0.20 + progress * (0.35 - 0.20)
+        mfm = 0.03 + progress * (0.09 - 0.03)
         return mae, mfm
 
     progress = min((epoch - 30) / 20, 1.0)
-    mae = 0.30 + progress * (0.35 - 0.30)
-    mfm = 0.08 + progress * (0.10 - 0.08)
+    mae = 0.35 + progress * (0.45 - 0.35)
+    mfm = 0.09 + progress * (0.15 - 0.09)
     return mae, mfm
+
 
 def get_last_checkpoint(checkpoint_dir):
     """Recherche le fichier .pt avec l'époque la plus élevée pour reprendre l'entraînement."""
@@ -190,12 +180,13 @@ def evaluate(model, data_loader, device, mae_mask_ratio):
 
     return metrics
 
-def train_foundation():
+
+def train_foundation_test():
     # --- 1. Configuration & Hyperparamètres ---
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     EPOCHS = 50
     LR_WARMUP_EPOCHS = 4
-    BATCH_SIZE = 512       
+    BATCH_SIZE = 512
     ACC_STEPS = 1
     LR = 1.5e-4
     SEQ_LEN = 32
@@ -203,12 +194,12 @@ def train_foundation():
     NUM_WORKERS = min(8, os.cpu_count() or 1)
     DATA_SIGNATURE = 'grouped_chronological_v1'
     VALIDATION_MAE_MASK_RATIO = 0.30
-    
+
     TRAIN_DIR = "/home/aka/PFE-code/data/nids_transformer_split/train"
     VALID_DIR = "/home/aka/PFE-code/data/nids_transformer_split/validation"
     TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
     STATS_PATH = "nids_normalization_stats.json"
-    CHECKPOINT_DIR = "./checkpoints"
+    CHECKPOINT_DIR = "./checkpoints_test"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     # --- 2. Initialisation des Données ---
@@ -247,18 +238,18 @@ def train_foundation():
 
     # --- 3. Initialisation du Modèle & Optimisation ---
     NUM_CONT = len(train_dataset.cont_cols)
-    CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]   
-    
+    CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
+
     model = SpatioTemporalTransformer(
-        num_cont_features=NUM_CONT, 
+        num_cont_features=NUM_CONT,
         cat_vocab_sizes=CAT_VOCABS,
         seq_len=SEQ_LEN,
         init_mae=0.10,
-        init_mfm=0.00
+        init_mfm=0.00,
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-    
+
     train_steps_per_epoch = max(math.ceil(len(train_loader) / ACC_STEPS), 1)
     total_steps = EPOCHS * train_steps_per_epoch
     warmup_steps = LR_WARMUP_EPOCHS * train_steps_per_epoch
@@ -276,9 +267,9 @@ def train_foundation():
     best_val_masked_mse = float('inf')
     best_anomaly_auc = float('-inf')
     last_cp = get_last_checkpoint(CHECKPOINT_DIR)
-    
+
     if last_cp:
-        print(f"🔄 Checkpoint trouvé : {last_cp}. Chargement en cours...")
+        print(f"Checkpoint trouvé : {last_cp}. Chargement en cours...")
         checkpoint = torch.load(last_cp, map_location=DEVICE)
         if checkpoint.get('data_signature') == DATA_SIGNATURE:
             model.load_state_dict(checkpoint['model_state_dict'])
@@ -288,33 +279,31 @@ def train_foundation():
             start_epoch = checkpoint['epoch'] + 1
             best_val_masked_mse = checkpoint.get('best_val_masked_mse', float('inf'))
             best_anomaly_auc = checkpoint.get('best_anomaly_auc', float('-inf'))
-            print(f" Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
+            print(f"Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
         else:
-            print(' Checkpoint ignoré: il provient d\'une ancienne configuration de données.')
+            print("Checkpoint ignoré: il provient d'une ancienne configuration de données.")
     else:
-        print(f" Aucun checkpoint trouvé. Début d'un nouvel entraînement sur {DEVICE}.")
+        print(f"Aucun checkpoint trouvé dans {CHECKPOINT_DIR}. Début d'un nouvel entraînement sur {DEVICE}.")
 
     # --- 5. Boucle d'Entraînement Principale ---
     for epoch in range(start_epoch, EPOCHS):
         model.train()
-        
-        # Application du Curriculum Learning (Manquant dans le code 2, rajouté ici)
+
         mae_r, mfm_r = get_progressive_ratios(epoch)
         model.mae_mask_ratio = mae_r
         model.mfm_layer.mask_ratio = mfm_r
-        
-        
+
         epoch_loss = 0.0
         epoch_masked_mse = 0.0
         epoch_full_mse = 0.0
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{EPOCHS}")
-        
+
         optimizer.zero_grad()
 
         for i, batch in progress_bar:
             cont = batch['continuous'].to(DEVICE, non_blocking=True)
             cat = batch['categorical'].to(DEVICE, non_blocking=True)
-            
+
             reconstructed, spatial_mask = model(cont, cat)
             batch_metrics = compute_reconstruction_metrics(reconstructed, cont, spatial_mask)
             loss = batch_metrics['train_loss'] / ACC_STEPS
@@ -326,7 +315,7 @@ def train_foundation():
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-            
+
             epoch_loss += batch_metrics['train_loss'].item()
             epoch_masked_mse += batch_metrics['masked_mse'].item()
             epoch_full_mse += batch_metrics['full_mse'].item()
@@ -335,7 +324,7 @@ def train_foundation():
                     "loss": f"{epoch_loss/(i+1):.4f}",
                     "masked_mse": f"{epoch_masked_mse/(i+1):.4f}",
                     "MAE": f"{mae_r:.2f}",
-                    "MFM": f"{mfm_r:.2f}"
+                    "MFM": f"{mfm_r:.2f}",
                 })
 
         validation_metrics = evaluate(model, validation_loader, DEVICE, VALIDATION_MAE_MASK_RATIO)
@@ -347,7 +336,6 @@ def train_foundation():
         current_best_val_masked_mse = validation_metrics['masked_mse'] if is_best_checkpoint else best_val_masked_mse
         current_best_anomaly_auc = validation_metrics['anomaly_auc'] if is_best_checkpoint else best_anomaly_auc
 
-        # Sauvegarde complète à la fin de l'époque
         checkpoint_path = f"{CHECKPOINT_DIR}/stt_epoch_{epoch+1}.pt"
         torch.save({
             'epoch': epoch,
@@ -382,9 +370,9 @@ def train_foundation():
                 'validation_mae_mask_ratio': VALIDATION_MAE_MASK_RATIO,
                 'data_signature': DATA_SIGNATURE,
             }, best_checkpoint_path)
-        
+
         print(
-            f" Epoch {epoch+1} complete. "
+            f"Epoch {epoch+1} complete. "
             f"TrainLoss: {train_loss:.6f} | TrainMaskedMSE: {train_masked_mse:.6f} | "
             f"ValMaskedMSE: {validation_metrics['masked_mse']:.6f} | "
             f"ValFullMSE: {validation_metrics['full_mse']:.6f} | "
@@ -392,10 +380,10 @@ def train_foundation():
             f"ValMaskRatio: {VALIDATION_MAE_MASK_RATIO:.2f} | Checkpoint: {checkpoint_path}"
         )
         print(
-            f" Validation score gap -> benign: {validation_metrics['benign_score_mean']:.6f}, "
+            f"Validation score gap -> benign: {validation_metrics['benign_score_mean']:.6f}, "
             f"attack: {validation_metrics['attack_score_mean']:.6f}"
         )
 
+
 if __name__ == "__main__":
-    train_foundation()
-    
+    train_foundation_test()

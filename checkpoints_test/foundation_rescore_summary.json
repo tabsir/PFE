@@ -1,0 +1,459 @@
+{
+  "validation_mae_mask_ratio": 0.3,
+  "best_checkpoint": "stt_epoch_20.pt",
+  "best_epoch": 20,
+  "best_val_masked_mse": 0.18078919500112534,
+  "best_anomaly_auc": 0.5116064491064491,
+  "rescored_checkpoints": [
+    {
+      "checkpoint": "stt_epoch_1.pt",
+      "epoch": 1,
+      "rescored_val_loss": 0.44055601954460144,
+      "rescored_val_masked_mse": 1.3239477276802063,
+      "rescored_val_full_mse": 1.360536813735962,
+      "rescored_anomaly_auc": 0.5480769230769231,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_2.pt",
+      "epoch": 2,
+      "rescored_val_loss": 0.33530648052692413,
+      "rescored_val_masked_mse": 0.9743392765522003,
+      "rescored_val_full_mse": 1.0281644463539124,
+      "rescored_anomaly_auc": 0.5400641025641025,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_3.pt",
+      "epoch": 3,
+      "rescored_val_loss": 0.24605271220207214,
+      "rescored_val_masked_mse": 0.7353979647159576,
+      "rescored_val_full_mse": 0.7588860988616943,
+      "rescored_anomaly_auc": 0.5363490675990676,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_4.pt",
+      "epoch": 4,
+      "rescored_val_loss": 0.14330755174160004,
+      "rescored_val_masked_mse": 0.4224410951137543,
+      "rescored_val_full_mse": 0.4474589079618454,
+      "rescored_anomaly_auc": 0.5492909867909868,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_5.pt",
+      "epoch": 5,
+      "rescored_val_loss": 0.09351395070552826,
+      "rescored_val_masked_mse": 0.2695092111825943,
+      "rescored_val_full_mse": 0.28252407908439636,
+      "rescored_anomaly_auc": 0.5242812742812742,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_6.pt",
+      "epoch": 6,
+      "rescored_val_loss": 0.07581089809536934,
+      "rescored_val_masked_mse": 0.21962665766477585,
+      "rescored_val_full_mse": 0.21440239995718002,
+      "rescored_anomaly_auc": 0.5187451437451438,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_7.pt",
+      "epoch": 7,
+      "rescored_val_loss": 0.062459586188197136,
+      "rescored_val_masked_mse": 0.20210088789463043,
+      "rescored_val_full_mse": 0.19269093871116638,
+      "rescored_anomaly_auc": 0.5154428904428905,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_8.pt",
+      "epoch": 8,
+      "rescored_val_loss": 0.05641930550336838,
+      "rescored_val_masked_mse": 0.18956358730793,
+      "rescored_val_full_mse": 0.18804286420345306,
+      "rescored_anomaly_auc": 0.5144716394716394,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_9.pt",
+      "epoch": 9,
+      "rescored_val_loss": 0.059926897287368774,
+      "rescored_val_masked_mse": 0.19951334595680237,
+      "rescored_val_full_mse": 0.18021684885025024,
+      "rescored_anomaly_auc": 0.5166083916083916,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_10.pt",
+      "epoch": 10,
+      "rescored_val_loss": 0.059482699260115623,
+      "rescored_val_masked_mse": 0.19986558705568314,
+      "rescored_val_full_mse": 0.18242429196834564,
+      "rescored_anomaly_auc": 0.5128690753690753,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_11.pt",
+      "epoch": 11,
+      "rescored_val_loss": 0.05630859173834324,
+      "rescored_val_masked_mse": 0.19014623016119003,
+      "rescored_val_full_mse": 0.18267638981342316,
+      "rescored_anomaly_auc": 0.5170940170940171,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_12.pt",
+      "epoch": 12,
+      "rescored_val_loss": 0.0588477049022913,
+      "rescored_val_masked_mse": 0.19930317997932434,
+      "rescored_val_full_mse": 0.18080134689807892,
+      "rescored_anomaly_auc": 0.513014763014763,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_13.pt",
+      "epoch": 13,
+      "rescored_val_loss": 0.05738157033920288,
+      "rescored_val_masked_mse": 0.1928795576095581,
+      "rescored_val_full_mse": 0.18101994693279266,
+      "rescored_anomaly_auc": 0.5162684537684538,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_14.pt",
+      "epoch": 14,
+      "rescored_val_loss": 0.05609927140176296,
+      "rescored_val_masked_mse": 0.19009706377983093,
+      "rescored_val_full_mse": 0.17984305322170258,
+      "rescored_anomaly_auc": 0.5153457653457654,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_15.pt",
+      "epoch": 15,
+      "rescored_val_loss": 0.05693346634507179,
+      "rescored_val_masked_mse": 0.19425313919782639,
+      "rescored_val_full_mse": 0.17914246022701263,
+      "rescored_anomaly_auc": 0.5109265734265734,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_16.pt",
+      "epoch": 16,
+      "rescored_val_loss": 0.05862991325557232,
+      "rescored_val_masked_mse": 0.2012767195701599,
+      "rescored_val_full_mse": 0.17702716588974,
+      "rescored_anomaly_auc": 0.5156857031857032,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_17.pt",
+      "epoch": 17,
+      "rescored_val_loss": 0.05852853134274483,
+      "rescored_val_masked_mse": 0.19931138306856155,
+      "rescored_val_full_mse": 0.17184225469827652,
+      "rescored_anomaly_auc": 0.5135003885003885,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_18.pt",
+      "epoch": 18,
+      "rescored_val_loss": 0.06017973646521568,
+      "rescored_val_masked_mse": 0.20642535388469696,
+      "rescored_val_full_mse": 0.17016232758760452,
+      "rescored_anomaly_auc": 0.5117035742035742,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_19.pt",
+      "epoch": 19,
+      "rescored_val_loss": 0.055129263550043106,
+      "rescored_val_masked_mse": 0.18406282365322113,
+      "rescored_val_full_mse": 0.16420817375183105,
+      "rescored_anomaly_auc": 0.515928515928516,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_20.pt",
+      "epoch": 20,
+      "rescored_val_loss": 0.054490018635988235,
+      "rescored_val_masked_mse": 0.18078919500112534,
+      "rescored_val_full_mse": 0.1610177680850029,
+      "rescored_anomaly_auc": 0.5116064491064491,
+      "is_best": true
+    },
+    {
+      "checkpoint": "stt_epoch_21.pt",
+      "epoch": 21,
+      "rescored_val_loss": 0.056552207097411156,
+      "rescored_val_masked_mse": 0.19002117961645126,
+      "rescored_val_full_mse": 0.16141392290592194,
+      "rescored_anomaly_auc": 0.5117521367521367,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_22.pt",
+      "epoch": 22,
+      "rescored_val_loss": 0.05993935279548168,
+      "rescored_val_masked_mse": 0.20767417550086975,
+      "rescored_val_full_mse": 0.16145437210798264,
+      "rescored_anomaly_auc": 0.5104895104895105,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_23.pt",
+      "epoch": 23,
+      "rescored_val_loss": 0.05953671969473362,
+      "rescored_val_masked_mse": 0.2066919282078743,
+      "rescored_val_full_mse": 0.15710178762674332,
+      "rescored_anomaly_auc": 0.5189879564879565,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_24.pt",
+      "epoch": 24,
+      "rescored_val_loss": 0.05782139115035534,
+      "rescored_val_masked_mse": 0.2024512216448784,
+      "rescored_val_full_mse": 0.1550728976726532,
+      "rescored_anomaly_auc": 0.5057789432789432,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_25.pt",
+      "epoch": 25,
+      "rescored_val_loss": 0.05476057715713978,
+      "rescored_val_masked_mse": 0.1888534501194954,
+      "rescored_val_full_mse": 0.14515017718076706,
+      "rescored_anomaly_auc": 0.49344405594405594,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_26.pt",
+      "epoch": 26,
+      "rescored_val_loss": 0.0594644621014595,
+      "rescored_val_masked_mse": 0.20894447714090347,
+      "rescored_val_full_mse": 0.14318786561489105,
+      "rescored_anomaly_auc": 0.5142773892773893,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_27.pt",
+      "epoch": 27,
+      "rescored_val_loss": 0.05875013209879398,
+      "rescored_val_masked_mse": 0.20812389254570007,
+      "rescored_val_full_mse": 0.13811906427145004,
+      "rescored_anomaly_auc": 0.5275835275835276,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_28.pt",
+      "epoch": 28,
+      "rescored_val_loss": 0.05579640343785286,
+      "rescored_val_masked_mse": 0.19684243202209473,
+      "rescored_val_full_mse": 0.13015031814575195,
+      "rescored_anomaly_auc": 0.5135975135975136,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_29.pt",
+      "epoch": 29,
+      "rescored_val_loss": 0.05554223991930485,
+      "rescored_val_masked_mse": 0.19879070669412613,
+      "rescored_val_full_mse": 0.12299689650535583,
+      "rescored_anomaly_auc": 0.5177253302253302,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_30.pt",
+      "epoch": 30,
+      "rescored_val_loss": 0.05510207451879978,
+      "rescored_val_masked_mse": 0.19866973161697388,
+      "rescored_val_full_mse": 0.12218549102544785,
+      "rescored_anomaly_auc": 0.47474747474747475,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_31.pt",
+      "epoch": 31,
+      "rescored_val_loss": 0.05850471369922161,
+      "rescored_val_masked_mse": 0.21372563391923904,
+      "rescored_val_full_mse": 0.12409847974777222,
+      "rescored_anomaly_auc": 0.5064102564102564,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_32.pt",
+      "epoch": 32,
+      "rescored_val_loss": 0.05555468238890171,
+      "rescored_val_masked_mse": 0.20063466578722,
+      "rescored_val_full_mse": 0.12042488157749176,
+      "rescored_anomaly_auc": 0.5116550116550117,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_33.pt",
+      "epoch": 33,
+      "rescored_val_loss": 0.05363418534398079,
+      "rescored_val_masked_mse": 0.19302057474851608,
+      "rescored_val_full_mse": 0.11465855315327644,
+      "rescored_anomaly_auc": 0.5004856254856255,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_34.pt",
+      "epoch": 34,
+      "rescored_val_loss": 0.05678895302116871,
+      "rescored_val_masked_mse": 0.2070508897304535,
+      "rescored_val_full_mse": 0.11721709743142128,
+      "rescored_anomaly_auc": 0.5097125097125097,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_35.pt",
+      "epoch": 35,
+      "rescored_val_loss": 0.05337294936180115,
+      "rescored_val_masked_mse": 0.19570183753967285,
+      "rescored_val_full_mse": 0.11377859860658646,
+      "rescored_anomaly_auc": 0.495483682983683,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_36.pt",
+      "epoch": 36,
+      "rescored_val_loss": 0.05700674094259739,
+      "rescored_val_masked_mse": 0.20863360911607742,
+      "rescored_val_full_mse": 0.11731638014316559,
+      "rescored_anomaly_auc": 0.48426573426573427,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_37.pt",
+      "epoch": 37,
+      "rescored_val_loss": 0.05748864263296127,
+      "rescored_val_masked_mse": 0.21046388149261475,
+      "rescored_val_full_mse": 0.11759530380368233,
+      "rescored_anomaly_auc": 0.5166083916083916,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_38.pt",
+      "epoch": 38,
+      "rescored_val_loss": 0.0590541735291481,
+      "rescored_val_masked_mse": 0.2200363129377365,
+      "rescored_val_full_mse": 0.11755852401256561,
+      "rescored_anomaly_auc": 0.5136946386946387,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_39.pt",
+      "epoch": 39,
+      "rescored_val_loss": 0.052944766357541084,
+      "rescored_val_masked_mse": 0.19302326440811157,
+      "rescored_val_full_mse": 0.11057165637612343,
+      "rescored_anomaly_auc": 0.48606254856254855,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_40.pt",
+      "epoch": 40,
+      "rescored_val_loss": 0.05510885640978813,
+      "rescored_val_masked_mse": 0.2038123682141304,
+      "rescored_val_full_mse": 0.11100893840193748,
+      "rescored_anomaly_auc": 0.5060703185703186,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_41.pt",
+      "epoch": 41,
+      "rescored_val_loss": 0.05457994528114796,
+      "rescored_val_masked_mse": 0.20003683120012283,
+      "rescored_val_full_mse": 0.1107390746474266,
+      "rescored_anomaly_auc": 0.4982517482517482,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_42.pt",
+      "epoch": 42,
+      "rescored_val_loss": 0.05210277438163757,
+      "rescored_val_masked_mse": 0.18934102356433868,
+      "rescored_val_full_mse": 0.10998959094285965,
+      "rescored_anomaly_auc": 0.4936868686868687,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_43.pt",
+      "epoch": 43,
+      "rescored_val_loss": 0.05627718009054661,
+      "rescored_val_masked_mse": 0.20842231810092926,
+      "rescored_val_full_mse": 0.11383694410324097,
+      "rescored_anomaly_auc": 0.4783896658896659,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_44.pt",
+      "epoch": 44,
+      "rescored_val_loss": 0.057274170219898224,
+      "rescored_val_masked_mse": 0.2129974141716957,
+      "rescored_val_full_mse": 0.11423994228243828,
+      "rescored_anomaly_auc": 0.5118492618492618,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_45.pt",
+      "epoch": 45,
+      "rescored_val_loss": 0.05950847081840038,
+      "rescored_val_masked_mse": 0.2218552678823471,
+      "rescored_val_full_mse": 0.11566982418298721,
+      "rescored_anomaly_auc": 0.526029526029526,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_46.pt",
+      "epoch": 46,
+      "rescored_val_loss": 0.054514266550540924,
+      "rescored_val_masked_mse": 0.2023148164153099,
+      "rescored_val_full_mse": 0.11105646938085556,
+      "rescored_anomaly_auc": 0.49975718725718726,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_47.pt",
+      "epoch": 47,
+      "rescored_val_loss": 0.05434058979153633,
+      "rescored_val_masked_mse": 0.1998894363641739,
+      "rescored_val_full_mse": 0.110580675303936,
+      "rescored_anomaly_auc": 0.49893162393162394,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_48.pt",
+      "epoch": 48,
+      "rescored_val_loss": 0.05875389091670513,
+      "rescored_val_masked_mse": 0.21906130015850067,
+      "rescored_val_full_mse": 0.11847448721528053,
+      "rescored_anomaly_auc": 0.48023504273504275,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_49.pt",
+      "epoch": 49,
+      "rescored_val_loss": 0.05246100015938282,
+      "rescored_val_masked_mse": 0.19120099395513535,
+      "rescored_val_full_mse": 0.10927878692746162,
+      "rescored_anomaly_auc": 0.49295843045843046,
+      "is_best": false
+    },
+    {
+      "checkpoint": "stt_epoch_50.pt",
+      "epoch": 50,
+      "rescored_val_loss": 0.05293106846511364,
+      "rescored_val_masked_mse": 0.1947120800614357,
+      "rescored_val_full_mse": 0.10823957249522209,
+      "rescored_anomaly_auc": 0.4975718725718726,
+      "is_best": false
+    }
+  ]
+}

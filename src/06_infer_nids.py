@@ -36,7 +36,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run downstream NIDS inference and print human-readable alerts.")
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="Path to the downstream multitask checkpoint.")
     parser.add_argument("--split", default="test", choices=["train", "validation", "test"], help="Dataset split to score.")
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference.")
+    parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference.") #see if i make it 512
     parser.add_argument("--seq-len", type=int, default=32, help="Sequence length used for the dataset.")
     parser.add_argument("--clip-value", type=float, default=5.0, help="Continuous feature clamp value.")
     parser.add_argument("--future-horizon-minutes", type=int, default=None, help="Override the future warning horizon stored in the checkpoint.")

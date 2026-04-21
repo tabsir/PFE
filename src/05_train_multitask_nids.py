@@ -1,7 +1,9 @@
+import argparse
 import json
 import math
 import os
 import importlib.util
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -27,6 +29,32 @@ stt_architecture = load_local_module("stt_architecture", "03_stt_architecture.py
 SpatioTemporalNIDSDataset = st_data_loader.SpatioTemporalNIDSDataset
 SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 NIDSMultiTaskModel = stt_architecture.NIDSMultiTaskModel
+
+
+DEFAULT_TRAIN_DIR = "/home/aka/PFE-code/data/nids_transformer_split/train"
+DEFAULT_VALID_DIR = "/home/aka/PFE-code/data/nids_transformer_split/validation"
+DEFAULT_TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
+DEFAULT_STATS_PATH = "nids_normalization_stats.json"
+DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/checkpoints/nids_multitask"
+DEFAULT_FOUNDATION_CHECKPOINT = "/home/aka/PFE-code/checkpoints/stt_best.pt"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train the downstream multitask NIDS model.")
+    parser.add_argument(
+        "--foundation-checkpoint",
+        default=DEFAULT_FOUNDATION_CHECKPOINT,
+        help="Foundation checkpoint used to initialize the backbone.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=DEFAULT_DOWNSTREAM_CHECKPOINT_DIR,
+        help="Directory where downstream checkpoints and metadata will be written.",
+    )
+    parser.add_argument("--epochs", type=int, default=20, help="Number of downstream training epochs.")
+    parser.add_argument("--batch-size", type=int, default=512, help="Batch size for downstream training.")
+    parser.add_argument("--num-workers", type=int, default=min(8, os.cpu_count() or 1), help="DataLoader worker count.")
+    return parser.parse_args()
 
 
 def compute_binary_auroc(labels, scores):
@@ -242,6 +270,7 @@ class DownstreamNIDSDataset(Dataset):
 
     def _load_or_build_targets(self):
         if os.path.exists(self.target_cache_path) and os.path.exists(self.target_meta_path):
+            print(f"Loading cached downstream targets: {self.target_cache_path}", flush=True)
             cached = np.load(self.target_cache_path)
             with open(self.target_meta_path, "r") as handle:
                 raw_attack_names = json.load(handle)["raw_attack_names"]
@@ -256,6 +285,7 @@ class DownstreamNIDSDataset(Dataset):
                 raw_attack_names,
             )
 
+        print("Building downstream targets cache. This can take a while on the first run...", flush=True)
         row_limit = len(self.base_dataset.data)
         if len(self.sequence_ranges) > 0:
             row_limit = int(self.sequence_ranges[-1][1])
@@ -310,6 +340,8 @@ class DownstreamNIDSDataset(Dataset):
         )
         with open(self.target_meta_path, "w") as handle:
             json.dump({"raw_attack_names": raw_attack_names}, handle, indent=2)
+
+        print(f"Saved downstream targets cache: {self.target_cache_path}", flush=True)
 
         return (
             sequence_current_labels,
@@ -502,9 +534,11 @@ def load_foundation_checkpoint(backbone, checkpoint_path, device):
 
 
 def train_multitask_nids():
+    args = parse_args()
+    print("Starting downstream NIDS training...", flush=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    epochs = 20
-    batch_size = 256
+    epochs = args.epochs
+    batch_size = args.batch_size
     seq_len = 32
     clip_value = 5.0
     warmup_epochs = 2
@@ -514,7 +548,7 @@ def train_multitask_nids():
     weight_decay = 1e-4
     future_horizon_minutes = 5
     min_known_attack_count = 100
-    num_workers = min(8, os.cpu_count() or 1)
+    num_workers = args.num_workers
 
     loss_weights = {
         "current": 1.0,
@@ -527,41 +561,54 @@ def train_multitask_nids():
         "future": 0.50,
     }
 
-    train_dir = "/home/aka/PFE-code/data/nids_transformer_split/train"
-    valid_dir = "/home/aka/PFE-code/data/nids_transformer_split/validation"
-    TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
-    stats_path = "nids_normalization_stats.json"
-    checkpoint_dir = "/home/aka/PFE-code/checkpoints/nids_multitask"
-    foundation_checkpoint = "/home/aka/PFE-code/checkpoints/stt_best.pt"
+    train_dir = DEFAULT_TRAIN_DIR
+    valid_dir = DEFAULT_VALID_DIR
+    TEST_DIR = DEFAULT_TEST_DIR
+    stats_path = DEFAULT_STATS_PATH
+    checkpoint_dir = args.output_dir
+    foundation_checkpoint = args.foundation_checkpoint
     os.makedirs(checkpoint_dir, exist_ok=True)
+
+    print(f"Foundation checkpoint: {foundation_checkpoint}", flush=True)
+    print(f"Downstream output directory: {checkpoint_dir}", flush=True)
 
     validation_path = valid_dir if os.path.exists(valid_dir) else TEST_DIR
     if validation_path == TEST_DIR:
         print("Validation split introuvable. Utilisation temporaire du split test comme validation downstream.")
 
+    print("Loading base train dataset...", flush=True)
     train_base_dataset = SpatioTemporalNIDSDataset(
         arrow_dir_path=train_dir,
         stats_path=stats_path,
         seq_len=seq_len,
         clip_value=clip_value,
     )
+    print(f"Base train dataset ready: {len(train_base_dataset)} sequences", flush=True)
+
+    print("Loading base validation dataset...", flush=True)
     valid_base_dataset = SpatioTemporalNIDSDataset(
         arrow_dir_path=validation_path,
         stats_path=stats_path,
         seq_len=seq_len,
         clip_value=clip_value,
     )
+    print(f"Base validation dataset ready: {len(valid_base_dataset)} sequences", flush=True)
 
+    print("Preparing downstream train targets...", flush=True)
     train_dataset = DownstreamNIDSDataset(
         train_base_dataset,
         future_horizon_minutes=future_horizon_minutes,
         min_known_attack_count=min_known_attack_count,
     )
+    print(f"Downstream train dataset ready: {len(train_dataset)} sequences", flush=True)
+
+    print("Preparing downstream validation targets...", flush=True)
     valid_dataset = DownstreamNIDSDataset(
         valid_base_dataset,
         future_horizon_minutes=future_horizon_minutes,
         known_attack_to_idx=train_dataset.known_attack_to_idx,
     )
+    print(f"Downstream validation dataset ready: {len(valid_dataset)} sequences", flush=True)
 
     attack_vocab_path = os.path.join(checkpoint_dir, "known_attack_labels.json")
     with open(attack_vocab_path, "w") as handle:
@@ -575,6 +622,7 @@ def train_multitask_nids():
         pin_memory=device.type == "cuda",
         persistent_workers=num_workers > 0,
     )
+    print(f"Train loader ready: {len(train_loader)} batches per epoch", flush=True)
     valid_loader = DataLoader(
         valid_dataset,
         batch_size=batch_size,
@@ -583,6 +631,7 @@ def train_multitask_nids():
         pin_memory=device.type == "cuda",
         persistent_workers=num_workers > 0,
     )
+    print(f"Validation loader ready: {len(valid_loader)} batches", flush=True)
 
     num_cont = len(train_base_dataset.cont_cols)
     cat_vocabs = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
@@ -594,11 +643,13 @@ def train_multitask_nids():
         init_mae=0.10,
         init_mfm=0.00,
     )
+    print(f"Loading foundation weights from {foundation_checkpoint}", flush=True)
     load_foundation_checkpoint(backbone, foundation_checkpoint, device)
     model = NIDSMultiTaskModel(
         backbone=backbone,
         num_known_attack_classes=len(train_dataset.known_attack_names),
     ).to(device)
+    print(f"Downstream model ready on {device}", flush=True)
 
     current_pos_weight = torch.tensor(
         build_pos_weight(train_dataset.sequence_current_labels),
@@ -658,12 +709,18 @@ def train_multitask_nids():
     best_score = -float("inf")
 
     for epoch in range(epochs):
+        print(f"Starting downstream epoch {epoch + 1}/{epochs}...", flush=True)
         backbone_trainable = epoch >= freeze_backbone_epochs
         set_backbone_trainable(model, backbone_trainable)
         model.train()
 
         running_losses = {"total": 0.0, "current": 0.0, "family": 0.0, "future": 0.0}
-        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Downstream Epoch {epoch + 1}/{epochs}")
+        progress_bar = tqdm(
+            enumerate(train_loader),
+            total=len(train_loader),
+            desc=f"Downstream Epoch {epoch + 1}/{epochs}",
+            file=sys.stdout,
+        )
 
         for step, batch in progress_bar:
             cont = batch["continuous"].to(device, non_blocking=True)
@@ -714,9 +771,12 @@ def train_multitask_nids():
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
+            "foundation_checkpoint": foundation_checkpoint,
+            "output_dir": checkpoint_dir,
             "known_attack_labels": train_dataset.known_attack_names,
             "future_horizon_minutes": future_horizon_minutes,
             "thresholds": thresholds,
+            "validation_score": validation_score,
             "validation_metrics": validation_metrics,
         }, epoch_checkpoint)
 
@@ -728,9 +788,12 @@ def train_multitask_nids():
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": scheduler.state_dict(),
+                "foundation_checkpoint": foundation_checkpoint,
+                "output_dir": checkpoint_dir,
                 "known_attack_labels": train_dataset.known_attack_names,
                 "future_horizon_minutes": future_horizon_minutes,
                 "thresholds": thresholds,
+                "validation_score": validation_score,
                 "validation_metrics": validation_metrics,
             }, best_checkpoint_path)
 
