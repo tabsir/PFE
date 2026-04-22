@@ -120,10 +120,11 @@ class SpatioTemporalTransformer(nn.Module):
 
 
 class NIDSMultiTaskModel(nn.Module):
-    def __init__(self, backbone, num_known_attack_classes, dropout=0.10):
+    def __init__(self, backbone, num_known_attack_classes, dropout=0.10, use_future_head=True):
         super().__init__()
         self.backbone = backbone
         self.num_known_attack_classes = num_known_attack_classes
+        self.use_future_head = use_future_head
 
         pooled_dim = backbone.d_model * 2
         self.pool_norm = nn.LayerNorm(pooled_dim)
@@ -133,7 +134,7 @@ class NIDSMultiTaskModel(nn.Module):
             nn.Dropout(dropout),
         )
         self.current_attack_head = nn.Linear(backbone.d_model, 1)
-        self.future_attack_head = nn.Linear(backbone.d_model, 1)
+        self.future_attack_head = nn.Linear(backbone.d_model, 1) if use_future_head else None
         self.attack_family_head = (
             nn.Linear(backbone.d_model, num_known_attack_classes)
             if num_known_attack_classes > 0
@@ -164,7 +165,9 @@ class NIDSMultiTaskModel(nn.Module):
 
         outputs = {
             'current_attack_logits': self.current_attack_head(pooled_features).squeeze(-1),
-            'future_attack_logits': self.future_attack_head(pooled_features).squeeze(-1),
+            'future_attack_logits': self.future_attack_head(pooled_features).squeeze(-1)
+            if self.future_attack_head is not None
+            else None,
             'pooled_features': pooled_features,
         }
 
@@ -178,7 +181,11 @@ class NIDSMultiTaskModel(nn.Module):
     @staticmethod
     def decode_predictions(outputs, attack_labels, current_threshold=0.50, known_attack_threshold=0.55, future_threshold=0.50):
         current_probs = torch.sigmoid(outputs['current_attack_logits']).detach().cpu()
-        future_probs = torch.sigmoid(outputs['future_attack_logits']).detach().cpu()
+        future_task_enabled = outputs.get('future_attack_logits') is not None
+        if future_task_enabled:
+            future_probs = torch.sigmoid(outputs['future_attack_logits']).detach().cpu()
+        else:
+            future_probs = torch.zeros_like(current_probs)
 
         if outputs.get('attack_family_logits') is not None:
             family_probs = torch.softmax(outputs['attack_family_logits'], dim=-1).detach().cpu()
@@ -196,8 +203,9 @@ class NIDSMultiTaskModel(nn.Module):
             known_conf = float(known_confidence[idx])
             sample = {
                 'current_attack_probability': current_prob,
+                'future_task_enabled': future_task_enabled,
                 'future_attack_probability': future_prob,
-                'future_warning': future_prob >= future_threshold,
+                'future_warning': future_task_enabled and future_prob >= future_threshold,
             }
 
             if current_prob < current_threshold:

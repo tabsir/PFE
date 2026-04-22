@@ -71,7 +71,8 @@ def load_checkpoint(checkpoint_path, device):
     )
     known_attack_labels = checkpoint.get("known_attack_labels", [])
     future_horizon_minutes = checkpoint.get("future_horizon_minutes", 5)
-    return checkpoint, thresholds, known_attack_labels, future_horizon_minutes
+    future_task_enabled = bool(checkpoint.get("future_task_enabled", True))
+    return checkpoint, thresholds, known_attack_labels, future_horizon_minutes, future_task_enabled
 
 
 def build_dataset(split_path, seq_len, clip_value, future_horizon_minutes, known_attack_labels, max_sequences):
@@ -91,7 +92,7 @@ def build_dataset(split_path, seq_len, clip_value, future_horizon_minutes, known
     return downstream_dataset
 
 
-def load_model(checkpoint, dataset, device, seq_len):
+def load_model(checkpoint, dataset, device, seq_len, future_task_enabled):
     num_cont = len(dataset.base_dataset.cont_cols)
     model = NIDSMultiTaskModel(
         backbone=SpatioTemporalTransformer(
@@ -102,6 +103,7 @@ def load_model(checkpoint, dataset, device, seq_len):
             init_mfm=0.00,
         ),
         num_known_attack_classes=len(checkpoint.get("known_attack_labels", [])),
+        use_future_head=future_task_enabled,
     ).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
@@ -126,25 +128,30 @@ def describe_prediction(sequence_idx, item, prediction, future_horizon_minutes):
     if "known_attack_confidence" in prediction:
         lines.append(f"Known-family confidence: {prediction['known_attack_confidence']:.4f}")
 
-    if prediction["future_warning"]:
-        lines.append(
-            f"Early warning: attack likely within the next {future_horizon_minutes} minutes "
-            f"(probability={prediction['future_attack_probability']:.4f})"
-        )
+    if prediction.get("future_task_enabled", True):
+        if prediction["future_warning"]:
+            lines.append(
+                f"Early warning: attack likely within the next {future_horizon_minutes} minutes "
+                f"(probability={prediction['future_attack_probability']:.4f})"
+            )
+        else:
+            lines.append(
+                f"Early warning: no imminent attack predicted within the next {future_horizon_minutes} minutes "
+                f"(probability={prediction['future_attack_probability']:.4f})"
+            )
     else:
-        lines.append(
-            f"Early warning: no imminent attack predicted within the next {future_horizon_minutes} minutes "
-            f"(probability={prediction['future_attack_probability']:.4f})"
-        )
+        lines.append("Early warning: disabled for this checkpoint")
 
     lines.extend([
         f"Ground truth current label: {current_ground_truth}",
         f"Ground truth attack type: {ground_truth_attack}",
-        f"Ground truth future attack in horizon: {future_truth}",
     ])
 
+    if prediction.get("future_task_enabled", True):
+        lines.append(f"Ground truth future attack in horizon: {future_truth}")
+
     future_lead_minutes = float(item["future_lead_minutes"])
-    if future_lead_minutes >= 0:
+    if prediction.get("future_task_enabled", True) and future_lead_minutes >= 0:
         lines.append(f"Ground truth future lead time: {future_lead_minutes:.2f} minutes")
 
     return "\n".join(lines)
@@ -153,6 +160,7 @@ def describe_prediction(sequence_idx, item, prediction, future_horizon_minutes):
 def summarize_predictions(predictions):
     status_counts = {}
     future_warning_count = 0
+    future_task_enabled = any(prediction.get("future_task_enabled", True) for prediction in predictions)
 
     for prediction in predictions:
         status_counts[prediction["status"]] = status_counts.get(prediction["status"], 0) + 1
@@ -161,7 +169,10 @@ def summarize_predictions(predictions):
     summary_lines = ["Inference summary"]
     for status_name in sorted(status_counts):
         summary_lines.append(f"{status_name}: {status_counts[status_name]}")
-    summary_lines.append(f"future warnings: {future_warning_count}")
+    if future_task_enabled:
+        summary_lines.append(f"future warnings: {future_warning_count}")
+    else:
+        summary_lines.append("future warnings: disabled")
     return "\n".join(summary_lines)
 
 
@@ -169,7 +180,7 @@ def run_inference():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint, thresholds, known_attack_labels, checkpoint_horizon = load_checkpoint(args.checkpoint, device)
+    checkpoint, thresholds, known_attack_labels, checkpoint_horizon, future_task_enabled = load_checkpoint(args.checkpoint, device)
     future_horizon_minutes = args.future_horizon_minutes or checkpoint_horizon
     split_path, resolved_split = resolve_split_path(args.split)
 
@@ -189,12 +200,13 @@ def run_inference():
         pin_memory=device.type == "cuda",
     )
 
-    model = load_model(checkpoint, dataset, device, args.seq_len)
+    model = load_model(checkpoint, dataset, device, args.seq_len, future_task_enabled)
 
     print(f"Loaded checkpoint: {args.checkpoint}")
     print(f"Running inference on split: {resolved_split}")
     print(f"Sequences to inspect: {len(dataset)}")
     print(f"Known attack labels: {known_attack_labels}")
+    print(f"Future task enabled: {future_task_enabled}")
 
     all_predictions = []
     item_index = 0

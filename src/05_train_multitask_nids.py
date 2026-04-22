@@ -1,9 +1,11 @@
 import argparse
+import contextlib
 import json
 import math
 import os
 import importlib.util
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -37,6 +39,46 @@ DEFAULT_TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
 DEFAULT_STATS_PATH = "nids_normalization_stats.json"
 DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/checkpoints/nids_multitask"
 DEFAULT_FOUNDATION_CHECKPOINT = "/home/aka/PFE-code/checkpoints/stt_best.pt"
+DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5
+
+PROJECT_ATTACK_FAMILY_ORDER = [
+    "DoS / DDoS",
+    "Brute Force",
+    "Botnets",
+    "Infiltration",
+    "Web Attacks",
+    "Fuzzers",
+    "Analysis / Backdoors",
+    "Exploits / Shellcode",
+    "Reconnaissance",
+    "Worms / Generic",
+]
+
+ATTACK_FAMILY_MAP = {
+    "Analysis": "Analysis / Backdoors",
+    "Backdoor": "Analysis / Backdoors",
+    "Bot": "Botnets",
+    "Brute_Force_-Web": "Web Attacks",
+    "Brute_Force_-XSS": "Web Attacks",
+    "DDOS_attack-HOIC": "DoS / DDoS",
+    "DDOS_attack-LOIC-UDP": "DoS / DDoS",
+    "DDoS_attacks-LOIC-HTTP": "DoS / DDoS",
+    "DoS": "DoS / DDoS",
+    "DoS_attacks-GoldenEye": "DoS / DDoS",
+    "DoS_attacks-Hulk": "DoS / DDoS",
+    "DoS_attacks-SlowHTTPTest": "DoS / DDoS",
+    "DoS_attacks-Slowloris": "DoS / DDoS",
+    "Exploits": "Exploits / Shellcode",
+    "FTP-BruteForce": "Brute Force",
+    "Generic": "Worms / Generic",
+    "Infilteration": "Infiltration",
+    "Infiltration": "Infiltration",
+    "Reconnaissance": "Reconnaissance",
+    "SQL_Injection": "Web Attacks",
+    "SSH-Bruteforce": "Brute Force",
+    "Shellcode": "Exploits / Shellcode",
+    "Worms": "Worms / Generic",
+}
 
 
 def parse_args():
@@ -51,10 +93,59 @@ def parse_args():
         default=DEFAULT_DOWNSTREAM_CHECKPOINT_DIR,
         help="Directory where downstream checkpoints and metadata will be written.",
     )
+    parser.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help="Checkpoint file or output directory to resume from. If a directory is provided, the latest readable epoch checkpoint is used.",
+    )
+    parser.add_argument(
+        "--min-known-attack-count",
+        type=int,
+        default=DEFAULT_MIN_KNOWN_ATTACK_COUNT,
+        help="Minimum number of malicious sequence windows required for a mapped attack family to become a supervised known class.",
+    )
+    parser.add_argument(
+        "--enable-future-task",
+        action="store_true",
+        help="Enable the future-attack prediction head and include it in training and model selection.",
+    )
     parser.add_argument("--epochs", type=int, default=20, help="Number of downstream training epochs.")
     parser.add_argument("--batch-size", type=int, default=512, help="Batch size for downstream training.")
     parser.add_argument("--num-workers", type=int, default=min(8, os.cpu_count() or 1), help="DataLoader worker count.")
     return parser.parse_args()
+
+
+def map_attack_family(attack_name):
+    attack_name = str(attack_name)
+    if attack_name == "Benign":
+        return "Benign"
+
+    mapped_name = ATTACK_FAMILY_MAP.get(attack_name)
+    if mapped_name is not None:
+        return mapped_name
+
+    lower_name = attack_name.lower()
+    if "fuzzer" in lower_name:
+        return "Fuzzers"
+    if "recon" in lower_name:
+        return "Reconnaissance"
+    if "worm" in lower_name or "generic" in lower_name:
+        return "Worms / Generic"
+    if "shellcode" in lower_name or "exploit" in lower_name:
+        return "Exploits / Shellcode"
+    if "analysis" in lower_name or "backdoor" in lower_name:
+        return "Analysis / Backdoors"
+    if "sql" in lower_name or "xss" in lower_name or "web" in lower_name:
+        return "Web Attacks"
+    if "brute" in lower_name or "ssh" in lower_name or "ftp" in lower_name:
+        return "Brute Force"
+    if "dos" in lower_name or "ddos" in lower_name or "hoic" in lower_name or "loic" in lower_name:
+        return "DoS / DDoS"
+    if "bot" in lower_name:
+        return "Botnets"
+    if "infil" in lower_name:
+        return "Infiltration"
+    return attack_name
 
 
 def compute_binary_auroc(labels, scores):
@@ -176,13 +267,17 @@ class DownstreamNIDSDataset(Dataset):
 
         self.known_attack_targets = np.full(len(self.sequence_ranges), -1, dtype=np.int64)
         self.unknown_attack_targets = np.zeros(len(self.sequence_ranges), dtype=np.int64)
+        self.sequence_attack_families = ["Benign"] * len(self.sequence_ranges)
+        self.attack_family_counts = Counter()
 
         for idx, raw_attack_id in enumerate(self.sequence_attack_ids):
             if self.sequence_current_labels[idx] == 0:
                 continue
-            attack_name = self.raw_attack_names[int(raw_attack_id)]
-            if attack_name in self.known_attack_to_idx:
-                self.known_attack_targets[idx] = self.known_attack_to_idx[attack_name]
+            attack_family = map_attack_family(self.raw_attack_names[int(raw_attack_id)])
+            self.sequence_attack_families[idx] = attack_family
+            self.attack_family_counts[attack_family] += 1
+            if attack_family in self.known_attack_to_idx:
+                self.known_attack_targets[idx] = self.known_attack_to_idx[attack_family]
             else:
                 self.unknown_attack_targets[idx] = 1
 
@@ -359,16 +454,22 @@ class DownstreamNIDSDataset(Dataset):
         for raw_attack_id, current_label in zip(self.sequence_attack_ids, self.sequence_current_labels):
             if current_label == 0:
                 continue
-            attack_name = self.raw_attack_names[int(raw_attack_id)]
+            attack_name = map_attack_family(self.raw_attack_names[int(raw_attack_id)])
             if attack_name == "Benign":
                 continue
             attack_counter[attack_name] += 1
 
         known_attack_names = [
             attack_name
-            for attack_name, count in sorted(attack_counter.items(), key=lambda item: (-item[1], item[0]))
-            if count >= min_known_attack_count
+            for attack_name in PROJECT_ATTACK_FAMILY_ORDER
+            if attack_counter.get(attack_name, 0) >= min_known_attack_count
         ]
+
+        for attack_name in sorted(attack_counter):
+            if attack_name in PROJECT_ATTACK_FAMILY_ORDER:
+                continue
+            if attack_counter[attack_name] >= min_known_attack_count:
+                known_attack_names.append(attack_name)
         return {attack_name: idx for idx, attack_name in enumerate(known_attack_names)}
 
 
@@ -385,7 +486,7 @@ def compute_multitask_losses(outputs, batch, current_loss_fn, family_loss_fn, fu
     current_loss = current_loss_fn(outputs["current_attack_logits"], current_targets)
 
     future_mask = current_targets == 0
-    if future_mask.any():
+    if outputs.get("future_attack_logits") is not None and future_loss_fn is not None and future_mask.any():
         future_loss = future_loss_fn(outputs["future_attack_logits"][future_mask], future_targets[future_mask])
     else:
         future_loss = outputs["current_attack_logits"].new_zeros(())
@@ -455,7 +556,7 @@ def evaluate_downstream(model, data_loader, device, thresholds):
             current_targets.append(current_target.cpu().numpy())
 
             benign_mask = current_target == 0
-            if benign_mask.any():
+            if outputs.get("future_attack_logits") is not None and benign_mask.any():
                 future_probability = torch.sigmoid(outputs["future_attack_logits"][benign_mask]).cpu().numpy()
                 future_probs.append(future_probability)
                 future_targets.append(future_target[benign_mask].cpu().numpy())
@@ -523,7 +624,7 @@ def load_foundation_checkpoint(backbone, checkpoint_path, device):
         print(f"No foundation checkpoint found at {checkpoint_path}. Downstream training starts from scratch.")
         return
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = load_trusted_checkpoint(checkpoint_path, device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
     missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
     print(f"Loaded foundation checkpoint: {checkpoint_path}")
@@ -531,6 +632,73 @@ def load_foundation_checkpoint(backbone, checkpoint_path, device):
         print(f"Missing keys while loading backbone: {missing_keys}")
     if unexpected_keys:
         print(f"Unexpected keys while loading backbone: {unexpected_keys}")
+
+
+def atomic_torch_save(payload, destination_path):
+    destination_path = Path(destination_path)
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, temp_path = tempfile.mkstemp(
+        dir=destination_path.parent,
+        prefix=f".{destination_path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(file_descriptor, "wb") as handle:
+            torch.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, destination_path)
+    except Exception as exc:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(temp_path)
+        raise RuntimeError(f"Failed to save checkpoint atomically: {destination_path}") from exc
+
+
+def load_trusted_checkpoint(checkpoint_path, device):
+    return torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+
+def extract_epoch_index(checkpoint_path):
+    try:
+        return int(Path(checkpoint_path).stem.rsplit("_", 1)[-1])
+    except (TypeError, ValueError):
+        return -1
+
+
+def resolve_resume_checkpoint(resume_value, device):
+    resume_path = Path(resume_value)
+    if resume_path.is_dir():
+        epoch_candidates = sorted(
+            resume_path.glob("nids_multitask_epoch_*.pt"),
+            key=extract_epoch_index,
+            reverse=True,
+        )
+        for epoch_path in epoch_candidates:
+            try:
+                checkpoint = load_trusted_checkpoint(epoch_path, device)
+                return epoch_path, checkpoint
+            except Exception as exc:
+                print(f"Skipping unreadable resume checkpoint {epoch_path}: {exc}", flush=True)
+        raise FileNotFoundError(f"No readable epoch checkpoint found in {resume_path}")
+
+    if not resume_path.exists():
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
+
+    checkpoint = load_trusted_checkpoint(resume_path, device)
+    return resume_path, checkpoint
+
+
+def load_best_validation_score(checkpoint_dir, device, fallback_score):
+    best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
+    if not best_checkpoint_path.exists():
+        return fallback_score
+
+    try:
+        best_checkpoint = load_trusted_checkpoint(best_checkpoint_path, device)
+        return float(best_checkpoint.get("validation_score", fallback_score))
+    except Exception as exc:
+        print(f"Warning: could not load best checkpoint {best_checkpoint_path}: {exc}", flush=True)
+        return fallback_score
 
 
 def train_multitask_nids():
@@ -547,13 +715,14 @@ def train_multitask_nids():
     head_lr = 2e-4
     weight_decay = 1e-4
     future_horizon_minutes = 5
-    min_known_attack_count = 100
+    min_known_attack_count = args.min_known_attack_count
+    future_task_enabled = args.enable_future_task
     num_workers = args.num_workers
 
     loss_weights = {
         "current": 1.0,
         "family": 1.0,
-        "future": 0.75,
+        "future": 0.75 if future_task_enabled else 0.0,
     }
     thresholds = {
         "current": 0.50,
@@ -567,10 +736,12 @@ def train_multitask_nids():
     stats_path = DEFAULT_STATS_PATH
     checkpoint_dir = args.output_dir
     foundation_checkpoint = args.foundation_checkpoint
+    resume_checkpoint = args.resume_checkpoint
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     print(f"Foundation checkpoint: {foundation_checkpoint}", flush=True)
     print(f"Downstream output directory: {checkpoint_dir}", flush=True)
+    print(f"Future task enabled: {future_task_enabled}", flush=True)
 
     validation_path = valid_dir if os.path.exists(valid_dir) else TEST_DIR
     if validation_path == TEST_DIR:
@@ -601,6 +772,8 @@ def train_multitask_nids():
         min_known_attack_count=min_known_attack_count,
     )
     print(f"Downstream train dataset ready: {len(train_dataset)} sequences", flush=True)
+    print(f"Mapped attack families in train: {dict(train_dataset.attack_family_counts)}", flush=True)
+    print(f"Known attack families: {train_dataset.known_attack_names}", flush=True)
 
     print("Preparing downstream validation targets...", flush=True)
     valid_dataset = DownstreamNIDSDataset(
@@ -609,6 +782,7 @@ def train_multitask_nids():
         known_attack_to_idx=train_dataset.known_attack_to_idx,
     )
     print(f"Downstream validation dataset ready: {len(valid_dataset)} sequences", flush=True)
+    print(f"Mapped attack families in validation: {dict(valid_dataset.attack_family_counts)}", flush=True)
 
     attack_vocab_path = os.path.join(checkpoint_dir, "known_attack_labels.json")
     with open(attack_vocab_path, "w") as handle:
@@ -648,6 +822,7 @@ def train_multitask_nids():
     model = NIDSMultiTaskModel(
         backbone=backbone,
         num_known_attack_classes=len(train_dataset.known_attack_names),
+        use_future_head=future_task_enabled,
     ).to(device)
     print(f"Downstream model ready on {device}", flush=True)
 
@@ -657,11 +832,12 @@ def train_multitask_nids():
         device=device,
     )
     benign_mask = train_dataset.sequence_current_labels == 0
-    future_pos_weight = torch.tensor(
-        build_pos_weight(train_dataset.future_attack_targets[benign_mask]),
-        dtype=torch.float32,
-        device=device,
-    )
+    if future_task_enabled:
+        future_pos_weight = torch.tensor(
+            build_pos_weight(train_dataset.future_attack_targets[benign_mask]),
+            dtype=torch.float32,
+            device=device,
+        )
 
     if train_dataset.known_attack_names:
         attack_counter = Counter(train_dataset.known_attack_targets[train_dataset.known_attack_targets >= 0].tolist())
@@ -674,7 +850,7 @@ def train_multitask_nids():
         family_weight_tensor = None
 
     current_loss_fn = nn.BCEWithLogitsLoss(pos_weight=current_pos_weight)
-    future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=future_pos_weight)
+    future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=future_pos_weight) if future_task_enabled else None
     family_loss_fn = nn.CrossEntropyLoss(weight=family_weight_tensor) if family_weight_tensor is not None else None
 
     evaluate_downstream.current_loss_fn = current_loss_fn
@@ -706,9 +882,44 @@ def train_multitask_nids():
         return 0.5 * (1 + math.cos(math.pi * progress))
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    start_epoch = 0
     best_score = -float("inf")
 
-    for epoch in range(epochs):
+    if resume_checkpoint:
+        resume_path, resume_state = resolve_resume_checkpoint(resume_checkpoint, device)
+        checkpoint_attack_labels = list(resume_state.get("known_attack_labels", []))
+        if checkpoint_attack_labels != list(train_dataset.known_attack_names):
+            raise ValueError(
+                "Resume checkpoint attack-label vocabulary does not match the current dataset. "
+                f"Checkpoint labels: {checkpoint_attack_labels} | Dataset labels: {train_dataset.known_attack_names}"
+            )
+
+        checkpoint_future_task_enabled = bool(resume_state.get("future_task_enabled", True))
+        if checkpoint_future_task_enabled != future_task_enabled:
+            raise ValueError(
+                "Resume checkpoint future-task setting does not match the current configuration. "
+                f"Checkpoint future_task_enabled={checkpoint_future_task_enabled} | "
+                f"Requested future_task_enabled={future_task_enabled}"
+            )
+
+        model.load_state_dict(resume_state["model_state_dict"])
+        optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        scheduler.load_state_dict(resume_state["scheduler_state_dict"])
+
+        foundation_checkpoint = resume_state.get("foundation_checkpoint", foundation_checkpoint)
+        start_epoch = int(resume_state.get("epoch", -1)) + 1
+        resume_score = float(resume_state.get("validation_score", -float("inf")))
+        best_score = load_best_validation_score(checkpoint_dir, device, resume_score)
+
+        print(f"Resumed downstream training from {resume_path}", flush=True)
+        print(f"Next epoch: {start_epoch + 1}/{epochs}", flush=True)
+        print(f"Current best validation score: {best_score:.6f}", flush=True)
+
+        if start_epoch >= epochs:
+            print("Resume checkpoint already reached the requested total epoch count. Nothing to do.", flush=True)
+            return
+
+    for epoch in range(start_epoch, epochs):
         print(f"Starting downstream epoch {epoch + 1}/{epochs}...", flush=True)
         backbone_trainable = epoch >= freeze_backbone_epochs
         set_backbone_trainable(model, backbone_trainable)
@@ -761,12 +972,12 @@ def train_multitask_nids():
 
         validation_metrics = evaluate_downstream(model, valid_loader, device, thresholds)
         validation_score = np.nan_to_num(validation_metrics["current"]["auc"], nan=0.0)
-        validation_score += np.nan_to_num(validation_metrics["future"]["auc"], nan=0.0)
+        if future_task_enabled:
+            validation_score += np.nan_to_num(validation_metrics["future"]["auc"], nan=0.0)
         validation_score += np.nan_to_num(validation_metrics["known_family_accuracy"], nan=0.0)
         validation_score += np.nan_to_num(validation_metrics["unknown_warning_recall"], nan=0.0)
 
-        epoch_checkpoint = os.path.join(checkpoint_dir, f"nids_multitask_epoch_{epoch + 1}.pt")
-        torch.save({
+        checkpoint_payload = {
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
@@ -775,27 +986,19 @@ def train_multitask_nids():
             "output_dir": checkpoint_dir,
             "known_attack_labels": train_dataset.known_attack_names,
             "future_horizon_minutes": future_horizon_minutes,
+            "future_task_enabled": future_task_enabled,
             "thresholds": thresholds,
             "validation_score": validation_score,
             "validation_metrics": validation_metrics,
-        }, epoch_checkpoint)
+        }
+
+        epoch_checkpoint = os.path.join(checkpoint_dir, f"nids_multitask_epoch_{epoch + 1}.pt")
+        atomic_torch_save(checkpoint_payload, epoch_checkpoint)
 
         if validation_score > best_score:
             best_score = validation_score
             best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "foundation_checkpoint": foundation_checkpoint,
-                "output_dir": checkpoint_dir,
-                "known_attack_labels": train_dataset.known_attack_names,
-                "future_horizon_minutes": future_horizon_minutes,
-                "thresholds": thresholds,
-                "validation_score": validation_score,
-                "validation_metrics": validation_metrics,
-            }, best_checkpoint_path)
+            atomic_torch_save(checkpoint_payload, best_checkpoint_path)
 
         print(
             f" Downstream epoch {epoch + 1} complete. "
