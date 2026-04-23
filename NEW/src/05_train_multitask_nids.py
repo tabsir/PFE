@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -33,12 +34,12 @@ SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 NIDSMultiTaskModel = stt_architecture.NIDSMultiTaskModel
 
 
-DEFAULT_TRAIN_DIR = "/home/aka/PFE-code/data/nids_transformer_split/train"
-DEFAULT_VALID_DIR = "/home/aka/PFE-code/data/nids_transformer_split/validation"
-DEFAULT_TEST_DIR = "/home/aka/PFE-code/data/nids_transformer_split/test"
-DEFAULT_STATS_PATH = "nids_normalization_stats.json"
-DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/checkpoints/nids_multitask"
-DEFAULT_FOUNDATION_CHECKPOINT = "/home/aka/PFE-code/checkpoints/stt_best.pt"
+DEFAULT_TRAIN_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/train"
+DEFAULT_VALID_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/validation"
+DEFAULT_TEST_DIR  = "/home/aka/PFE-code/OLD/data/nids_src_grouped/test"
+DEFAULT_STATS_PATH = "/home/aka/PFE-code/OLD/nids_normalization_stats.json"
+DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05"
+DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best.pt"
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5
 
 PROJECT_ATTACK_FAMILY_ORDER = [
@@ -219,6 +220,48 @@ def build_pos_weight(binary_targets):
     if positives == 0:
         return 1.0
     return max(negatives / positives, 1.0)
+
+
+class FocalLoss(nn.Module):
+    """Binary focal loss for class-imbalanced detection tasks."""
+
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, logits, targets):
+        bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        probs = torch.sigmoid(logits)
+        p_t = probs * targets + (1.0 - probs) * (1.0 - targets)
+        alpha_t = self.alpha * targets + (1.0 - self.alpha) * (1.0 - targets)
+        loss = alpha_t * (1.0 - p_t) ** self.gamma * bce
+        return loss.mean()
+
+
+def sweep_best_f1_threshold(labels, probabilities):
+    """Sweep probability thresholds to find the operating point with maximum F1."""
+    labels = np.asarray(labels, dtype=np.int64)
+    probs = np.asarray(probabilities, dtype=np.float64)
+    if labels.size == 0 or int(labels.sum()) == 0:
+        return 0.5, 0.0, 0.0, 0.0
+    candidates = np.unique(np.concatenate([
+        np.linspace(0.05, 0.95, 91),
+        np.percentile(probs, [10, 20, 30, 40, 50, 60, 70, 80, 90]),
+    ]))
+    best_f1, best_thresh, best_precision, best_recall = 0.0, 0.5, 0.0, 0.0
+    for t in candidates:
+        preds = probs >= t
+        tp = int(np.logical_and(preds, labels == 1).sum())
+        fp = int(np.logical_and(preds, labels == 0).sum())
+        fn = int(np.logical_and(~preds, labels == 1).sum())
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        f1 = 2.0 * precision * recall / max(precision + recall, 1e-9)
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, float(t)
+            best_precision, best_recall = precision, recall
+    return float(best_thresh), float(best_f1), float(best_precision), float(best_recall)
 
 
 class DownstreamNIDSDataset(Dataset):
@@ -586,6 +629,15 @@ def evaluate_downstream(model, data_loader, device, thresholds):
     current_labels = np.concatenate(current_targets) if current_targets else np.array([])
     current_metrics = compute_binary_metrics(current_labels, current_probabilities, thresholds["current"])
 
+    best_thresh, best_f1, best_prec, best_rec = sweep_best_f1_threshold(current_labels, current_probabilities)
+    best_current_metrics = {
+        "threshold": best_thresh,
+        "f1": best_f1,
+        "precision": best_prec,
+        "recall": best_rec,
+        "auc": current_metrics["auc"],
+    }
+
     future_probabilities = np.concatenate(future_probs) if future_probs else np.array([])
     future_labels = np.concatenate(future_targets) if future_targets else np.array([])
     future_metrics = compute_binary_metrics(future_labels, future_probabilities, thresholds["future"])
@@ -612,6 +664,7 @@ def evaluate_downstream(model, data_loader, device, thresholds):
     return {
         "loss": metric_totals,
         "current": current_metrics,
+        "best_current": best_current_metrics,
         "future": future_metrics,
         "known_family_accuracy": known_family_accuracy,
         "unknown_warning_recall": unknown_warning_recall,
@@ -720,8 +773,8 @@ def train_multitask_nids():
     num_workers = args.num_workers
 
     loss_weights = {
-        "current": 1.0,
-        "family": 1.0,
+        "current": 2.0,
+        "family": 0.5,
         "future": 0.75 if future_task_enabled else 0.0,
     }
     thresholds = {
@@ -826,11 +879,6 @@ def train_multitask_nids():
     ).to(device)
     print(f"Downstream model ready on {device}", flush=True)
 
-    current_pos_weight = torch.tensor(
-        build_pos_weight(train_dataset.sequence_current_labels),
-        dtype=torch.float32,
-        device=device,
-    )
     benign_mask = train_dataset.sequence_current_labels == 0
     if future_task_enabled:
         future_pos_weight = torch.tensor(
@@ -849,9 +897,11 @@ def train_multitask_nids():
     else:
         family_weight_tensor = None
 
-    current_loss_fn = nn.BCEWithLogitsLoss(pos_weight=current_pos_weight)
+    positive_rate = float(train_dataset.sequence_current_labels.mean())
+    focal_alpha = 1.0 - positive_rate
+    current_loss_fn = FocalLoss(alpha=focal_alpha, gamma=2.0)
     future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=future_pos_weight) if future_task_enabled else None
-    family_loss_fn = nn.CrossEntropyLoss(weight=family_weight_tensor) if family_weight_tensor is not None else None
+    family_loss_fn = nn.CrossEntropyLoss(weight=family_weight_tensor, label_smoothing=0.1) if family_weight_tensor is not None else None
 
     evaluate_downstream.current_loss_fn = current_loss_fn
     evaluate_downstream.future_loss_fn = future_loss_fn
@@ -971,11 +1021,13 @@ def train_multitask_nids():
             })
 
         validation_metrics = evaluate_downstream(model, valid_loader, device, thresholds)
-        validation_score = np.nan_to_num(validation_metrics["current"]["auc"], nan=0.0)
+        best_current = validation_metrics["best_current"]
+        thresholds["current"] = best_current["threshold"]
+
+        validation_score = best_current["f1"] * 2.0 + np.nan_to_num(best_current["auc"], nan=0.0)
         if future_task_enabled:
             validation_score += np.nan_to_num(validation_metrics["future"]["auc"], nan=0.0)
-        validation_score += np.nan_to_num(validation_metrics["known_family_accuracy"], nan=0.0)
-        validation_score += np.nan_to_num(validation_metrics["unknown_warning_recall"], nan=0.0)
+        validation_score += np.nan_to_num(validation_metrics["known_family_accuracy"], nan=0.0) * 0.5
 
         checkpoint_payload = {
             "epoch": epoch,
@@ -988,6 +1040,7 @@ def train_multitask_nids():
             "future_horizon_minutes": future_horizon_minutes,
             "future_task_enabled": future_task_enabled,
             "thresholds": thresholds,
+            "best_threshold": thresholds["current"],
             "validation_score": validation_score,
             "validation_metrics": validation_metrics,
         }
@@ -1000,14 +1053,16 @@ def train_multitask_nids():
             best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
             atomic_torch_save(checkpoint_payload, best_checkpoint_path)
 
+        best_c = validation_metrics["best_current"]
         print(
             f" Downstream epoch {epoch + 1} complete. "
-            f"CurrentAUC: {validation_metrics['current']['auc']:.4f} | "
-            f"CurrentF1: {validation_metrics['current']['f1']:.4f} | "
-            f"KnownAcc: {validation_metrics['known_family_accuracy']:.4f} | "
-            f"UnknownRecall: {validation_metrics['unknown_warning_recall']:.4f} | "
-            f"FutureAUC: {validation_metrics['future']['auc']:.4f} | "
-            f"Lead(min): {validation_metrics['mean_future_lead_minutes']:.2f}"
+            f"BestThresh={best_c['threshold']:.3f} → "
+            f"P={best_c['precision']:.4f} R={best_c['recall']:.4f} F1={best_c['f1']:.4f} | "
+            f"AUC={best_c['auc']:.4f} | "
+            f"KnownAcc={validation_metrics['known_family_accuracy']:.4f} | "
+            f"UnknownRecall={validation_metrics['unknown_warning_recall']:.4f} | "
+            f"FutureAUC={validation_metrics['future']['auc']:.4f} | "
+            f"Score={validation_score:.4f}"
         )
 
 

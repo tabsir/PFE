@@ -85,5 +85,5 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
     print(f" Statistiques globales générées et sauvegardées dans '{output_file}'.")
 
 if __name__ == "__main__":
-    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train" # Vérifie juste que ce chemin est bon chez toi
+    TRAIN_PATH = "/home/aka/PFE-code/OLD/data/nids_src_grouped/train"
     compute_global_statistics(TRAIN_PATH)
