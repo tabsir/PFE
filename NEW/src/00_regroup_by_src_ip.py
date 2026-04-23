@@ -23,14 +23,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from datasets import load_from_disk, Dataset
+import pyarrow as pa
+from datasets import load_from_disk, Dataset, concatenate_datasets
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = Path("/home/aka/PFE-code")
-INPUT_BASE  = BASE_DIR / "OLD" / "data" / "nids_transformer_split"
-OUTPUT_BASE = BASE_DIR / "OLD" / "data" / "nids_src_grouped"
+INPUT_BASE  = BASE_DIR / "NEW" / "data" / "nids_transformer_split"
+OUTPUT_BASE = BASE_DIR / "NEW" / "data" / "nids_src_grouped"
 
 SPLITS = ["train", "validation", "test"]
 
@@ -104,10 +105,47 @@ def regroup_split(split_name: str):
     print(f"[{split_name}] Expected sequences (non-overlapping stride=32) : {expected_seqs:,}", flush=True)
 
     print(f"[{split_name}] Saving to {output_dir} ...", flush=True)
-    hf_out = Dataset.from_pandas(df, preserve_index=False)
-    hf_out.save_to_disk(str(output_dir))
-    del df, hf_out
+    # Convert pandas → Arrow in chunks to avoid a large peak-RAM spike.
+    # Doing pa.Table.from_pandas(full_17M_df) while the df is still live
+    # doubles peak RAM (pandas copy + Arrow copy simultaneously).
+    # Instead: write 2M-row shards to a temp dir, free the full df, then
+    # reload and concatenate as a proper HF Dataset.
+    _tmp = output_dir.parent / f"_tmp_{split_name}_shards"
+    _tmp.mkdir(parents=True, exist_ok=True)
+
+    _ROWS_PER_SHARD = 2_000_000
+    _n = len(df)
+    _n_shards = max(1, (_n + _ROWS_PER_SHARD - 1) // _ROWS_PER_SHARD)
+    _shard_paths = []
+
+    for _s_idx in range(_n_shards):
+        _start = _s_idx * _ROWS_PER_SHARD
+        _end   = min(_start + _ROWS_PER_SHARD, _n)
+        _sp = _tmp / f"shard-{_s_idx:04d}.arrow"
+        _shard_paths.append(_sp)
+        _tbl = pa.Table.from_pandas(df.iloc[_start:_end], preserve_index=False)
+        with pa.ipc.new_stream(str(_sp), _tbl.schema) as _w:
+            _w.write_table(_tbl)
+        del _tbl
+        gc.collect()
+        print(f"[{split_name}]   chunk {_s_idx + 1}/{_n_shards} written "
+              f"({_end - _start:,} rows)", flush=True)
+
+    del df
     gc.collect()
+
+    _shard_dss = []
+    for _sp in _shard_paths:
+        with pa.ipc.open_stream(str(_sp)) as _r:
+            _shard_dss.append(Dataset(_r.read_all()))
+    hf_out = concatenate_datasets(_shard_dss)
+    del _shard_dss
+    gc.collect()
+
+    hf_out.save_to_disk(str(output_dir))
+    del hf_out
+    gc.collect()
+    shutil.rmtree(_tmp)
 
     print(f"[{split_name}] Done.", flush=True)
 

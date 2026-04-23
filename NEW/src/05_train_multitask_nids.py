@@ -34,10 +34,10 @@ SpatioTemporalTransformer = stt_architecture.SpatioTemporalTransformer
 NIDSMultiTaskModel = stt_architecture.NIDSMultiTaskModel
 
 
-DEFAULT_TRAIN_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/train"
-DEFAULT_VALID_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/validation"
-DEFAULT_TEST_DIR  = "/home/aka/PFE-code/OLD/data/nids_src_grouped/test"
-DEFAULT_STATS_PATH = "/home/aka/PFE-code/OLD/nids_normalization_stats.json"
+DEFAULT_TRAIN_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/train"
+DEFAULT_VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
+DEFAULT_TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
+DEFAULT_STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05"
 DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best.pt"
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5

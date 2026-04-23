@@ -28,8 +28,8 @@ DownstreamNIDSDataset = downstream_module.DownstreamNIDSDataset
 
 CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
 DEFAULT_CHECKPOINT = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05/nids_multitask_best.pt"
-DEFAULT_STATS      = "/home/aka/PFE-code/OLD/nids_normalization_stats.json"
-DEFAULT_DATA_ROOT  = "/home/aka/PFE-code/OLD/data/nids_src_grouped"
+DEFAULT_STATS      = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
+DEFAULT_DATA_ROOT  = "/home/aka/PFE-code/NEW/data/nids_src_grouped"
 
 
 def parse_args():

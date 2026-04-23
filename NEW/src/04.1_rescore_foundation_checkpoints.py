@@ -41,9 +41,9 @@ def load_local_module(module_name, filename):
 DEFAULT_CHECKPOINT_DIRS = [
     "/home/aka/PFE-code/NEW/checkpoints",
 ]
-DEFAULT_STATS_PATH = "/home/aka/PFE-code/OLD/nids_normalization_stats.json"
-DEFAULT_VALID_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/validation"
-DEFAULT_TEST_DIR  = "/home/aka/PFE-code/OLD/data/nids_src_grouped/test"
+DEFAULT_STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
+DEFAULT_VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
+DEFAULT_TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
 DEFAULT_VALIDATION_MAE_MASK_RATIO = 0.30
 DEFAULT_SEQ_LEN = 32
 DEFAULT_CLIP_VALUE = 5.0

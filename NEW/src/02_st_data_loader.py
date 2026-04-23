@@ -75,9 +75,14 @@ class SpatioTemporalNIDSDataset(Dataset):
         sequence_ranges = []
         current_group_start = 0
         previous_last_group = None
+        total_rows = len(self.data)
+        n_batches = (total_rows + scan_batch_size - 1) // scan_batch_size
+        print(f"  Building sequence ranges: {total_rows:,} rows in {n_batches} batches ...", flush=True)
 
         for batch_start in range(0, len(self.data), scan_batch_size):
             batch_end = min(batch_start + scan_batch_size, len(self.data))
+            batch_num = batch_start // scan_batch_size + 1
+            print(f"  [batch {batch_num}/{n_batches}] rows {batch_start:,}–{batch_end:,} ...", flush=True)
             group_batch = np.asarray(self.data[batch_start:batch_end][self.group_col], dtype=np.uint64)
             if group_batch.size == 0:
                 continue
@@ -97,6 +102,7 @@ class SpatioTemporalNIDSDataset(Dataset):
         if previous_last_group is not None:
             sequence_ranges.extend(self._expand_group_ranges(current_group_start, len(self.data)))
 
+        print(f"  Sequence ranges built: {len(sequence_ranges):,} sequences. Saving cache ...", flush=True)
         return sequence_ranges
 
     def __len__(self):

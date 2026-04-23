@@ -1,4 +1,5 @@
 
+import sys
 import torch
 import math
 import torch.nn as nn
@@ -14,6 +15,7 @@ from pathlib import Path
 
 # 1. Chargement dynamique des modules
 def load_local_module(module_name, filename):
+    print(f"Chargement du module local '{module_name}' depuis {filename}...")
     module_path = Path(__file__).with_name(filename)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
@@ -196,7 +198,7 @@ def evaluate(model, data_loader, device, mae_mask_ratio):
     anomaly_labels = []
 
     with torch.no_grad():
-        for batch in tqdm(data_loader, total=len(data_loader), desc='Validation', leave=False):
+        for batch in tqdm(data_loader, total=len(data_loader), desc='Validation', leave=False, file=sys.stdout):
             cont = batch['continuous'].to(device, non_blocking=True)
             cat = batch['categorical'].to(device, non_blocking=True)
             labels = batch['label'].to(device, non_blocking=True)
@@ -238,6 +240,7 @@ def evaluate(model, data_loader, device, mae_mask_ratio):
     return metrics
 
 def train_foundation():
+    print("running train_foundation()...")
     # --- 1. Configuration & Hyperparamètres ---
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     EPOCHS = 50
@@ -251,10 +254,10 @@ def train_foundation():
     DATA_SIGNATURE = 'grouped_chronological_v1'
     VALIDATION_MAE_MASK_RATIO = 0.30
     
-    TRAIN_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/train"
-    VALID_DIR = "/home/aka/PFE-code/OLD/data/nids_src_grouped/validation"
-    TEST_DIR  = "/home/aka/PFE-code/OLD/data/nids_src_grouped/test"
-    STATS_PATH = "/home/aka/PFE-code/OLD/nids_normalization_stats.json"
+    TRAIN_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/train"
+    VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
+    TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
+    STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
     CHECKPOINT_DIR = "/home/aka/PFE-code/NEW/checkpoints"
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -359,7 +362,7 @@ def train_foundation():
         epoch_loss = 0.0
         epoch_masked_mse = 0.0
         epoch_full_mse = 0.0
-        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{EPOCHS}")
+        progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{EPOCHS}", file=sys.stdout)
         
         optimizer.zero_grad()
 
