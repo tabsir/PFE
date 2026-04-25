@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from tqdm import tqdm
 
 
@@ -805,6 +805,7 @@ def train_multitask_nids():
         arrow_dir_path=train_dir,
         stats_path=stats_path,
         seq_len=seq_len,
+        stride=16,
         clip_value=clip_value,
     )
     print(f"Base train dataset ready: {len(train_base_dataset)} sequences", flush=True)
@@ -814,6 +815,7 @@ def train_multitask_nids():
         arrow_dir_path=validation_path,
         stats_path=stats_path,
         seq_len=seq_len,
+        stride=16,
         clip_value=clip_value,
     )
     print(f"Base validation dataset ready: {len(valid_base_dataset)} sequences", flush=True)
@@ -841,10 +843,23 @@ def train_multitask_nids():
     with open(attack_vocab_path, "w") as handle:
         json.dump({"known_attack_labels": train_dataset.known_attack_names}, handle, indent=2)
 
+    # WeightedRandomSampler: attack sequences drawn ~as often as benign ones
+    _labels = train_dataset.sequence_current_labels.astype(np.float32)
+    _pos_rate = float(_labels.mean())
+    _sample_weights = np.where(
+        _labels == 1,
+        (1.0 - _pos_rate) / max(_pos_rate, 1e-6),   # weight for attacks
+        1.0,                                           # weight for benign
+    ).astype(np.float32)
+    _sampler = WeightedRandomSampler(
+        weights=torch.from_numpy(_sample_weights),
+        num_samples=len(_sample_weights),
+        replacement=True,
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=_sampler,
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
         persistent_workers=num_workers > 0,
@@ -899,7 +914,7 @@ def train_multitask_nids():
 
     positive_rate = float(train_dataset.sequence_current_labels.mean())
     focal_alpha = 1.0 - positive_rate
-    current_loss_fn = FocalLoss(alpha=focal_alpha, gamma=2.0)
+    current_loss_fn = FocalLoss(alpha=focal_alpha, gamma=3.0)
     future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=future_pos_weight) if future_task_enabled else None
     family_loss_fn = nn.CrossEntropyLoss(weight=family_weight_tensor, label_smoothing=0.1) if family_weight_tensor is not None else None
 

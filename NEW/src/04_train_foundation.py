@@ -270,12 +270,14 @@ def train_foundation():
         arrow_dir_path=TRAIN_DIR,
         stats_path=STATS_PATH,
         seq_len=SEQ_LEN,
+        stride=16,
         clip_value=CLIP_VALUE,
     )
     validation_dataset = SpatioTemporalNIDSDataset(
         arrow_dir_path=validation_path,
         stats_path=STATS_PATH,
         seq_len=SEQ_LEN,
+        stride=16,
         clip_value=CLIP_VALUE,
     )
     train_loader = DataLoader(
