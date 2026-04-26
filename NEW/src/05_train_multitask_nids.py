@@ -39,7 +39,7 @@ DEFAULT_VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
 DEFAULT_TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
 DEFAULT_STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05"
-DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best.pt"
+DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best_04.1.pt"
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5
 
 PROJECT_ATTACK_FAMILY_ORDER = [
@@ -773,12 +773,12 @@ def train_multitask_nids():
     num_workers = args.num_workers
 
     loss_weights = {
-        "current": 2.0,
+        "current": 2.0, #detect attack is the primary task, so it gets the highest weight
         "family": 0.5,
         "future": 0.75 if future_task_enabled else 0.0,
     }
     thresholds = {
-        "current": 0.50,
+        "current": 0.50, #If the model’s predicted probability for an attack is ≥ 0.5, it’s considered an attack 
         "known": 0.55,
         "future": 0.50,
     }

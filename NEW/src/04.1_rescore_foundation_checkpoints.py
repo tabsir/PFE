@@ -45,9 +45,13 @@ DEFAULT_STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
 DEFAULT_TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
 DEFAULT_VALIDATION_MAE_MASK_RATIO = 0.30
+
 DEFAULT_SEQ_LEN = 32
 DEFAULT_CLIP_VALUE = 5.0
 DEFAULT_BATCH_SIZE = 512
+
+# MFM rescoring support
+DEFAULT_VALIDATION_MFM_MASK_RATIO = 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -111,21 +115,16 @@ def _auc_safe(v):
 
 
 def is_better_ids_checkpoint(challenger, champion):
-    """F1 → AUC → masked-MSE selection."""
-    c_f1 = float(challenger.get("best_f1", float("nan")))
-    b_f1 = float(champion.get("best_f1", float("nan")))
+    """masked-MSE → AUC selection (foundation logic)."""
     eps = 1e-6
-
-    if math.isfinite(c_f1):
-        if not math.isfinite(b_f1) or c_f1 > b_f1 + eps:
-            return True
-        if math.isclose(c_f1, b_f1, rel_tol=0.0, abs_tol=eps):
-            c_auc = _auc_safe(challenger.get("anomaly_auc"))
-            b_auc = _auc_safe(champion.get("anomaly_auc"))
-            if c_auc > b_auc + eps:
-                return True
-            if math.isclose(c_auc, b_auc, rel_tol=0.0, abs_tol=eps):
-                return float(challenger.get("masked_mse", float("inf"))) < float(champion.get("masked_mse", float("inf"))) - eps
+    c_mse = float(challenger.get("masked_mse", float("inf")))
+    b_mse = float(champion.get("masked_mse", float("inf")))
+    if c_mse < b_mse - eps:
+        return True
+    if math.isclose(c_mse, b_mse, rel_tol=0.0, abs_tol=eps):
+        c_auc = _auc_safe(challenger.get("anomaly_auc"))
+        b_auc = _auc_safe(champion.get("anomaly_auc"))
+        return c_auc > b_auc + eps
     return False
 
 
@@ -157,6 +156,7 @@ def atomic_torch_save(payload, destination_path):
 # Fixed validation mask (same across all checkpoint evaluations)
 # ---------------------------------------------------------------------------
 
+
 def build_fixed_validation_mask(num_sequences, seq_len, mask_ratio, device, seed=42):
     rng = torch.Generator(device="cpu")
     rng.manual_seed(seed)
@@ -168,10 +168,11 @@ def build_fixed_validation_mask(num_sequences, seq_len, mask_ratio, device, seed
 # Per-checkpoint evaluation
 # ---------------------------------------------------------------------------
 
-def evaluate_checkpoint(model, data_loader, device, fixed_masks, mask_ratio):
+
+def evaluate_checkpoint(model, data_loader, device, fixed_masks, mask_ratio, use_mfm=False):
     """
     Evaluates a loaded model with pre-generated fixed masks.
-    fixed_masks: list of per-batch boolean tensors matching each batch.
+    If use_mfm=True, evaluates the MFM head (apply_mfm=True), else MAE (apply_mfm=False).
     """
     import torch.nn.functional as F
 
@@ -183,16 +184,15 @@ def evaluate_checkpoint(model, data_loader, device, fixed_masks, mask_ratio):
     anomaly_labels = []
 
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(data_loader, desc="  Rescoring", leave=False)):
+        for batch_idx, batch in enumerate(tqdm(data_loader, desc="  Rescoring (MFM)" if use_mfm else "  Rescoring (MAE)", leave=False)):
             cont = batch["continuous"].to(device, non_blocking=True)
             cat  = batch["categorical"].to(device, non_blocking=True)
             labels = batch["label"].to(device, non_blocking=True)
 
             spatial_mask = fixed_masks[batch_idx].to(device)
-            # Trim mask to actual batch size (last batch may be smaller)
             spatial_mask = spatial_mask[:cont.shape[0]]
 
-            reconstructed, used_mask = model(cont, cat, spatial_mask=spatial_mask, apply_mfm=False)
+            reconstructed, used_mask = model(cont, cat, spatial_mask=spatial_mask, apply_mfm=use_mfm)
 
             mse_raw     = (reconstructed - cont).pow(2)
             robust_raw  = F.smooth_l1_loss(reconstructed, cont, reduction="none", beta=1.0)
@@ -257,15 +257,22 @@ def main():
     )
     print(f"Validation dataset ready: {len(valid_dataset)} sequences", flush=True)
 
+
     # Pre-build fixed masks for every batch (so all checkpoints see identical masks)
-    print("Building fixed validation masks...", flush=True)
-    fixed_masks = []
+    print("Building fixed validation masks for MAE and MFM...", flush=True)
+    fixed_masks_mae = []
+    fixed_masks_mfm = []
     for batch in valid_loader:
         bsz = batch["continuous"].shape[0]
-        rng = torch.Generator()
-        rng.manual_seed(42 + len(fixed_masks))
-        m = torch.rand(bsz, DEFAULT_SEQ_LEN, generator=rng) < DEFAULT_VALIDATION_MAE_MASK_RATIO
-        fixed_masks.append(m)
+        rng_mae = torch.Generator()
+        rng_mae.manual_seed(42 + len(fixed_masks_mae))
+        m_mae = torch.rand(bsz, DEFAULT_SEQ_LEN, generator=rng_mae) < DEFAULT_VALIDATION_MAE_MASK_RATIO
+        fixed_masks_mae.append(m_mae)
+
+        rng_mfm = torch.Generator()
+        rng_mfm.manual_seed(142 + len(fixed_masks_mfm))
+        m_mfm = torch.rand(bsz, DEFAULT_SEQ_LEN, generator=rng_mfm) < DEFAULT_VALIDATION_MFM_MASK_RATIO
+        fixed_masks_mfm.append(m_mfm)
 
     # Build a blank model (weights loaded per checkpoint)
     num_cont = len(valid_dataset.cont_cols)
@@ -275,7 +282,7 @@ def main():
         cat_vocab_sizes=cat_vocabs,
         seq_len=DEFAULT_SEQ_LEN,
         init_mae=DEFAULT_VALIDATION_MAE_MASK_RATIO,
-        init_mfm=0.00,
+        init_mfm=DEFAULT_VALIDATION_MFM_MASK_RATIO,
     ).to(device)
 
     # Collect all epoch checkpoints across all configured dirs
@@ -294,7 +301,9 @@ def main():
         raise RuntimeError("No epoch checkpoints found in any configured directory.")
 
     # Score every checkpoint
+
     results = []
+    best_combined_metric = None
     best_metrics = None
     best_checkpoint_path = None
     best_checkpoint_dir = None
@@ -309,74 +318,104 @@ def main():
             print(f"  Skipping (load error): {exc}", flush=True)
             continue
 
-        metrics = evaluate_checkpoint(model, valid_loader, device, fixed_masks,
-                                       DEFAULT_VALIDATION_MAE_MASK_RATIO)
+        metrics_mae = evaluate_checkpoint(model, valid_loader, device, fixed_masks_mae, DEFAULT_VALIDATION_MAE_MASK_RATIO, use_mfm=False)
+        metrics_mfm = evaluate_checkpoint(model, valid_loader, device, fixed_masks_mfm, DEFAULT_VALIDATION_MFM_MASK_RATIO, use_mfm=True)
+
+        combined_metric = metrics_mae["masked_mse"] + metrics_mfm["masked_mse"]
 
         entry = {
             "epoch":           epoch_num,
             "checkpoint_path": str(ckpt_path),
             "checkpoint_dir":  str(checkpoint_dir),
-            **metrics,
+            "mae": metrics_mae,
+            "mfm": metrics_mfm,
+            "combined_masked_mse": combined_metric,
         }
         results.append(entry)
 
         print(
-            f"  Epoch {epoch_num:3d} | "
-            f"masked_mse={metrics['masked_mse']:.6f} | "
-            f"AUC={metrics['anomaly_auc']:.4f} | "
-            f"F1={metrics['best_f1']:.4f} "
-            f"(P={metrics['best_precision']:.4f} R={metrics['best_recall']:.4f} "
-            f"thr={metrics['best_threshold']:.4f})",
+            f"  Epoch {epoch_num:3d} | MAE: masked_mse={metrics_mae['masked_mse']:.6f} | AUC={metrics_mae['anomaly_auc']:.4f} | F1={metrics_mae['best_f1']:.4f} "
+            f"(P={metrics_mae['best_precision']:.4f} R={metrics_mae['best_recall']:.4f} thr={metrics_mae['best_threshold']:.4f})",
+            flush=True,
+        )
+        print(
+            f"                 | MFM: masked_mse={metrics_mfm['masked_mse']:.6f} | AUC={metrics_mfm['anomaly_auc']:.4f} | F1={metrics_mfm['best_f1']:.4f} "
+            f"(P={metrics_mfm['best_precision']:.4f} R={metrics_mfm['best_recall']:.4f} thr={metrics_mfm['best_threshold']:.4f})",
+            flush=True,
+        )
+        print(
+            f"                 | Combined masked_mse={combined_metric:.6f}",
             flush=True,
         )
 
-        if best_metrics is None or is_better_ids_checkpoint(metrics, best_metrics):
-            best_metrics = metrics
+        # Select best checkpoint based on combined metric (lower is better)
+        if best_combined_metric is None or combined_metric < best_combined_metric:
+            best_combined_metric = combined_metric
+            best_metrics = {"mae": metrics_mae, "mfm": metrics_mfm, "combined_masked_mse": combined_metric, "epoch": epoch_num}
             best_checkpoint_path = ckpt_path
             best_checkpoint_dir  = checkpoint_dir
 
     if best_checkpoint_path is None:
         raise RuntimeError("No checkpoint could be rescored.")
 
-    print(f"\nBest checkpoint: {best_checkpoint_path}", flush=True)
+    print(f"\nBest checkpoint (by combined masked_mse): {best_checkpoint_path}", flush=True)
     print(
-        f"  F1={best_metrics['best_f1']:.4f} | "
-        f"AUC={best_metrics['anomaly_auc']:.4f} | "
-        f"masked_mse={best_metrics['masked_mse']:.6f}",
+        f"  Combined masked_mse={best_metrics['combined_masked_mse']:.6f} | "
+        f"MAE masked_mse={best_metrics['mae']['masked_mse']:.6f} | "
+        f"MFM masked_mse={best_metrics['mfm']['masked_mse']:.6f}",
         flush=True,
     )
 
-    # Write stt_best.pt
+
+
+    # Write stt_best.pt (now based on combined metric)
     best_saved = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
     best_payload = {
-        "epoch":              best_metrics["epoch"] if "epoch" in best_metrics else int(Path(best_checkpoint_path).stem.rsplit("_", 1)[-1]) - 1,
+        "epoch":              best_metrics["epoch"],
         "model_state_dict":   best_saved["model_state_dict"],
-        "val_masked_mse":     best_metrics["masked_mse"],
-        "anomaly_auc":        best_metrics["anomaly_auc"],
-        "best_f1":            best_metrics["best_f1"],
-        "best_precision":     best_metrics["best_precision"],
-        "best_recall":        best_metrics["best_recall"],
-        "best_threshold":     best_metrics["best_threshold"],
+        "val_masked_mse_mae": best_metrics["mae"]["masked_mse"],
+        "val_masked_mse_mfm": best_metrics["mfm"]["masked_mse"],
+        "val_combined_masked_mse": best_metrics["combined_masked_mse"],
+        "anomaly_auc_mae":    best_metrics["mae"]["anomaly_auc"],
+        "anomaly_auc_mfm":    best_metrics["mfm"]["anomaly_auc"],
+        "best_f1_mae":        best_metrics["mae"]["best_f1"],
+        "best_f1_mfm":        best_metrics["mfm"]["best_f1"],
+        "best_precision_mae": best_metrics["mae"]["best_precision"],
+        "best_precision_mfm": best_metrics["mfm"]["best_precision"],
+        "best_recall_mae":    best_metrics["mae"]["best_recall"],
+        "best_recall_mfm":    best_metrics["mfm"]["best_recall"],
+        "best_threshold_mae": best_metrics["mae"]["best_threshold"],
+        "best_threshold_mfm": best_metrics["mfm"]["best_threshold"],
         "validation_mae_mask_ratio": DEFAULT_VALIDATION_MAE_MASK_RATIO,
+        "validation_mfm_mask_ratio": DEFAULT_VALIDATION_MFM_MASK_RATIO,
         "rescore_source":     str(best_checkpoint_path),
     }
     output_best = os.path.join(best_checkpoint_dir, "stt_best.pt")
     atomic_torch_save(best_payload, output_best)
     print(f"stt_best.pt written to {output_best}", flush=True)
 
-    # Write summary JSON
+    # Write summary JSON (with both MAE, MFM, and combined results)
     summary = {
         "best_epoch":              best_payload["epoch"],
         "best_checkpoint":         str(best_checkpoint_path),
-        "best_masked_mse":         best_metrics["masked_mse"],
-        "best_anomaly_auc":        best_metrics["anomaly_auc"],
-        "best_f1":                 best_metrics["best_f1"],
-        "best_precision":          best_metrics["best_precision"],
-        "best_recall":             best_metrics["best_recall"],
-        "best_threshold":          best_metrics["best_threshold"],
+        "best_masked_mse_mae":     best_metrics["mae"]["masked_mse"],
+        "best_masked_mse_mfm":     best_metrics["mfm"]["masked_mse"],
+        "best_combined_masked_mse": best_metrics["combined_masked_mse"],
+        "best_anomaly_auc_mae":    best_metrics["mae"]["anomaly_auc"],
+        "best_anomaly_auc_mfm":    best_metrics["mfm"]["anomaly_auc"],
+        "best_f1_mae":             best_metrics["mae"]["best_f1"],
+        "best_f1_mfm":             best_metrics["mfm"]["best_f1"],
+        "best_precision_mae":      best_metrics["mae"]["best_precision"],
+        "best_precision_mfm":      best_metrics["mfm"]["best_precision"],
+        "best_recall_mae":         best_metrics["mae"]["best_recall"],
+        "best_recall_mfm":         best_metrics["mfm"]["best_recall"],
+        "best_threshold_mae":      best_metrics["mae"]["best_threshold"],
+        "best_threshold_mfm":      best_metrics["mfm"]["best_threshold"],
+        "mae_mask_ratio":          DEFAULT_VALIDATION_MAE_MASK_RATIO,
+        "mfm_mask_ratio":          DEFAULT_VALIDATION_MFM_MASK_RATIO,
         "all_results":             results,
     }
-    summary_path = os.path.join(best_checkpoint_dir, "foundation_rescore_summary.json")
+    summary_path = os.path.join(best_checkpoint_dir, "foundation_rescore_summary_with_mfm.json")
     with open(summary_path, "w") as fh:
         json.dump(summary, fh, indent=2)
     print(f"Summary written to {summary_path}", flush=True)
