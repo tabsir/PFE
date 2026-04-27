@@ -43,6 +43,7 @@ DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5
 DEFAULT_TRAIN_TARGET_POSITIVE_RATE = 0.20
 DEFAULT_THRESHOLD_TARGET_RECALL = 0.85
+DEFAULT_UNKNOWN_FAMILY_LOSS_WEIGHT = 0.25
 
 PROJECT_ATTACK_FAMILY_ORDER = [
     "DoS / DDoS",
@@ -146,6 +147,12 @@ def parse_args():
         type=float,
         default=DEFAULT_THRESHOLD_TARGET_RECALL,
         help="Recall target used to pick the current-attack operating threshold on validation.",
+    )
+    parser.add_argument(
+        "--unknown-family-loss-weight",
+        type=float,
+        default=DEFAULT_UNKNOWN_FAMILY_LOSS_WEIGHT,
+        help="Weight for the open-set family regularizer that keeps unknown attacks from collapsing into known-family predictions.",
     )
     parser.add_argument("--epochs", type=int, default=20, help="Number of downstream training epochs.")
     parser.add_argument("--batch-size", type=int, default=512, help="Batch size for downstream training.")
@@ -323,6 +330,15 @@ class FocalLoss(nn.Module):
         alpha_t = self.alpha * targets + (1.0 - self.alpha) * (1.0 - targets)
         loss = alpha_t * (1.0 - p_t) ** self.gamma * bce
         return loss.mean()
+
+
+def compute_unknown_family_regularization_loss(logits):
+    if logits.numel() == 0 or logits.shape[-1] <= 1:
+        return logits.new_zeros(())
+
+    log_probs = F.log_softmax(logits, dim=-1)
+    uniform_targets = torch.full_like(log_probs, 1.0 / log_probs.shape[-1])
+    return F.kl_div(log_probs, uniform_targets, reduction="batchmean")
 
 
 def select_threshold_for_target_recall(labels, probabilities, target_recall):
@@ -674,10 +690,19 @@ def set_backbone_trainable(model, trainable):
         parameter.requires_grad = trainable
 
 
-def compute_multitask_losses(outputs, batch, current_loss_fn, family_loss_fn, future_loss_fn, loss_weights):
+def compute_multitask_losses(
+    outputs,
+    batch,
+    current_loss_fn,
+    family_loss_fn,
+    future_loss_fn,
+    unknown_family_loss_fn,
+    loss_weights,
+):
     current_targets = batch["label"].float()
     future_targets = batch["future_attack"].float()
     known_attack_targets = batch["known_attack_id"]
+    unknown_attack_targets = batch.get("unknown_attack_target")
 
     current_loss = current_loss_fn(outputs["current_attack_logits"], current_targets)
 
@@ -693,10 +718,22 @@ def compute_multitask_losses(outputs, batch, current_loss_fn, family_loss_fn, fu
     else:
         family_loss = outputs["current_attack_logits"].new_zeros(())
 
+    unknown_attack_mask = unknown_attack_targets > 0.5 if unknown_attack_targets is not None else None
+    if (
+        outputs["attack_family_logits"] is not None
+        and unknown_family_loss_fn is not None
+        and unknown_attack_mask is not None
+        and unknown_attack_mask.any()
+    ):
+        unknown_loss = unknown_family_loss_fn(outputs["attack_family_logits"][unknown_attack_mask])
+    else:
+        unknown_loss = outputs["current_attack_logits"].new_zeros(())
+
     total_loss = (
         loss_weights["current"] * current_loss
         + loss_weights["family"] * family_loss
         + loss_weights["future"] * future_loss
+        + loss_weights.get("unknown", 0.0) * unknown_loss
     )
 
     return {
@@ -704,12 +741,13 @@ def compute_multitask_losses(outputs, batch, current_loss_fn, family_loss_fn, fu
         "current": current_loss,
         "family": family_loss,
         "future": future_loss,
+        "unknown": unknown_loss,
     }
 
 
 def evaluate_downstream(model, data_loader, device, thresholds):
     model.eval()
-    metric_totals = {"total": 0.0, "current": 0.0, "family": 0.0, "future": 0.0}
+    metric_totals = {"total": 0.0, "current": 0.0, "family": 0.0, "future": 0.0, "unknown": 0.0}
     current_probs = []
     current_targets = []
     future_probs = []
@@ -737,10 +775,12 @@ def evaluate_downstream(model, data_loader, device, thresholds):
                     "label": current_target,
                     "future_attack": future_target,
                     "known_attack_id": known_attack_target,
+                    "unknown_attack_target": unknown_target,
                 },
                 evaluate_downstream.current_loss_fn,
                 evaluate_downstream.family_loss_fn,
                 evaluate_downstream.future_loss_fn,
+                evaluate_downstream.unknown_family_loss_fn,
                 evaluate_downstream.loss_weights,
             )
 
@@ -934,6 +974,7 @@ def ensure_checkpoint_dir_compatible(
     future_task_enabled,
     train_target_positive_rate,
     threshold_target_recall,
+    unknown_family_loss_weight,
     device,
 ):
     best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
@@ -948,6 +989,7 @@ def ensure_checkpoint_dir_compatible(
         "future_task_enabled": future_task_enabled,
         "train_target_positive_rate": train_target_positive_rate,
         "threshold_target_recall": threshold_target_recall,
+        "unknown_family_loss_weight": unknown_family_loss_weight,
     }
     mismatches = []
     missing_fields = []
@@ -1030,6 +1072,7 @@ def train_multitask_nids():
     rebuild_caches = args.rebuild_caches
     train_target_positive_rate = args.train_target_positive_rate
     threshold_target_recall = args.threshold_target_recall
+    unknown_family_loss_weight = args.unknown_family_loss_weight
 
     if not 0.0 < train_target_positive_rate < 1.0:
         raise ValueError(
@@ -1039,11 +1082,16 @@ def train_multitask_nids():
         raise ValueError(
             f"threshold_target_recall must be in (0, 1], got {threshold_target_recall}"
         )
+    if unknown_family_loss_weight < 0.0:
+        raise ValueError(
+            f"unknown_family_loss_weight must be >= 0, got {unknown_family_loss_weight}"
+        )
 
     loss_weights = {
         "current": 2.0, #detect attack is the primary task, so it gets the highest weight
         "family": 0.5,
         "future": 0.75 if future_task_enabled else 0.0,
+        "unknown": unknown_family_loss_weight,
     }
     thresholds = {
         "current": 0.50, #If the model’s predicted probability for an attack is ≥ 0.5, it’s considered an attack 
@@ -1067,6 +1115,7 @@ def train_multitask_nids():
     print(f"Current label rule: {current_label_rule}", flush=True)
     print(f"Train target positive rate: {train_target_positive_rate:.3f}", flush=True)
     print(f"Threshold target recall: {threshold_target_recall:.3f}", flush=True)
+    print(f"Unknown family loss weight: {unknown_family_loss_weight:.3f}", flush=True)
     print(f"Rebuild caches: {rebuild_caches}", flush=True)
     ensure_checkpoint_dir_compatible(
         checkpoint_dir,
@@ -1076,6 +1125,7 @@ def train_multitask_nids():
         future_task_enabled,
         train_target_positive_rate,
         threshold_target_recall,
+        unknown_family_loss_weight,
         device,
     )
 
@@ -1210,10 +1260,12 @@ def train_multitask_nids():
     current_loss_fn = FocalLoss(alpha=focal_alpha, gamma=3.0)
     future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=future_pos_weight) if future_task_enabled else None
     family_loss_fn = nn.CrossEntropyLoss(weight=family_weight_tensor, label_smoothing=0.1) if family_weight_tensor is not None else None
+    unknown_family_loss_fn = compute_unknown_family_regularization_loss if train_dataset.known_attack_names else None
 
     evaluate_downstream.current_loss_fn = current_loss_fn
     evaluate_downstream.future_loss_fn = future_loss_fn
     evaluate_downstream.family_loss_fn = family_loss_fn
+    evaluate_downstream.unknown_family_loss_fn = unknown_family_loss_fn
     evaluate_downstream.loss_weights = loss_weights
     evaluate_downstream.threshold_target_recall = threshold_target_recall
 
@@ -1297,6 +1349,17 @@ def train_multitask_nids():
                 f"Requested threshold_target_recall={threshold_target_recall}"
             )
 
+        checkpoint_unknown_family_loss_weight = resume_state.get("unknown_family_loss_weight")
+        if (
+            checkpoint_unknown_family_loss_weight is not None
+            and float(checkpoint_unknown_family_loss_weight) != float(unknown_family_loss_weight)
+        ):
+            raise ValueError(
+                "Resume checkpoint unknown-family loss configuration does not match the current configuration. "
+                f"Checkpoint unknown_family_loss_weight={checkpoint_unknown_family_loss_weight} | "
+                f"Requested unknown_family_loss_weight={unknown_family_loss_weight}"
+            )
+
         model.load_state_dict(resume_state["model_state_dict"])
         optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         scheduler.load_state_dict(resume_state["scheduler_state_dict"])
@@ -1325,7 +1388,7 @@ def train_multitask_nids():
         set_backbone_trainable(model, backbone_trainable)
         model.train()
 
-        running_losses = {"total": 0.0, "current": 0.0, "family": 0.0, "future": 0.0}
+        running_losses = {"total": 0.0, "current": 0.0, "family": 0.0, "future": 0.0, "unknown": 0.0}
         progress_bar = tqdm(
             enumerate(train_loader),
             total=len(train_loader),
@@ -1339,6 +1402,7 @@ def train_multitask_nids():
             label = batch["label"].to(device, non_blocking=True)
             future_attack = batch["future_attack"].to(device, non_blocking=True)
             known_attack_id = batch["known_attack_id"].to(device, non_blocking=True)
+            unknown_attack_target = batch["unknown_attack_target"].to(device, non_blocking=True)
 
             outputs = model(cont, cat, apply_mfm=False)
             losses = compute_multitask_losses(
@@ -1347,10 +1411,12 @@ def train_multitask_nids():
                     "label": label,
                     "future_attack": future_attack,
                     "known_attack_id": known_attack_id,
+                    "unknown_attack_target": unknown_attack_target,
                 },
                 current_loss_fn,
                 family_loss_fn,
                 future_loss_fn,
+                unknown_family_loss_fn,
                 loss_weights,
             )
 
@@ -1368,6 +1434,7 @@ def train_multitask_nids():
                 "current": f"{running_losses['current'] / (step + 1):.4f}",
                 "family": f"{running_losses['family'] / (step + 1):.4f}",
                 "future": f"{running_losses['future'] / (step + 1):.4f}",
+                "unknown": f"{running_losses['unknown'] / (step + 1):.4f}",
             })
 
         validation_metrics = evaluate_downstream(model, valid_loader, device, thresholds)
@@ -1391,6 +1458,8 @@ def train_multitask_nids():
             "current_label_rule": current_label_rule,
             "train_target_positive_rate": train_target_positive_rate,
             "threshold_target_recall": threshold_target_recall,
+            "unknown_family_loss_weight": unknown_family_loss_weight,
+            "loss_weights": loss_weights,
             "thresholds": thresholds,
             "best_threshold": thresholds["current"],
             "validation_score": validation_score,

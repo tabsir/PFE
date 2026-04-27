@@ -4,13 +4,18 @@ from datasets import load_from_disk
 import numpy as np
 import json
 import os
+from pathlib import Path
+
+
+DEFAULT_STATS_PATH = Path(__file__).resolve().parents[1] / "nids_normalization_stats.json"
+DEFAULT_TRAIN_PATH = "/home/aka/PFE-code/NEW/data/nids_src_grouped/train"
 
 
 class SpatioTemporalNIDSDataset(Dataset):
     def __init__(
         self,
         arrow_dir_path,
-        stats_path="nids_normalization_stats.json",
+        stats_path=str(DEFAULT_STATS_PATH),
         seq_len=32,
         stride=16,
         clip_value=5.0,
@@ -162,8 +167,8 @@ class SpatioTemporalNIDSDataset(Dataset):
 
 # Test d'intégration
 if __name__ == "__main__":
-    TRAIN_PATH = "/home/aka/PFE-code/data/nids_transformer_split/train" # À adapter selon ton arborescence
-    STATS_PATH = "nids_normalization_stats.json"
+    TRAIN_PATH = DEFAULT_TRAIN_PATH
+    STATS_PATH = str(DEFAULT_STATS_PATH)
     
     try:
         train_dataset = SpatioTemporalNIDSDataset(arrow_dir_path=TRAIN_PATH, stats_path=STATS_PATH, seq_len=32)
