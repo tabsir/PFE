@@ -78,6 +78,12 @@ def build_validation_mask(batch_size, seq_len, mask_ratio, device):
     return torch.rand(batch_size, seq_len, device=device) < mask_ratio
 
 
+def build_fixed_validation_mask(batch_size, seq_len, mask_ratio, device, seed):
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(seed)
+    return (torch.rand(batch_size, seq_len, generator=generator) < mask_ratio).to(device)
+
+
 def compute_reconstruction_metrics(reconstructed, target, spatial_mask):
     mse_raw = (reconstructed - target).pow(2)
     robust_raw = F.smooth_l1_loss(reconstructed, target, reduction='none', beta=1.0)
@@ -127,18 +133,51 @@ def compute_binary_auroc(labels, scores):
     return float(auc)
 
 
-def _auc_for_selection(auc_value):
-    if auc_value is None or math.isnan(auc_value):
+def compute_binary_pr_auc(labels, scores):
+    labels = np.asarray(labels, dtype=np.int64)
+    scores = np.asarray(scores, dtype=np.float64)
+
+    positive_count = int((labels == 1).sum())
+    if labels.size == 0 or positive_count == 0:
+        return float('nan')
+
+    order = np.argsort(scores)[::-1]
+    sorted_labels = labels[order]
+    true_positives = np.cumsum(sorted_labels == 1)
+    false_positives = np.cumsum(sorted_labels == 0)
+
+    precision = true_positives / np.maximum(true_positives + false_positives, 1)
+    recall = true_positives / positive_count
+    precision = np.concatenate(([1.0], precision))
+    recall = np.concatenate(([0.0], recall))
+    return float(np.trapezoid(precision, recall))
+
+
+def _metric_for_selection(metric_value):
+    if metric_value is None or math.isnan(metric_value):
         return float('-inf')
-    return float(auc_value)
+    return float(metric_value)
 
 
-def is_better_checkpoint(validation_metrics, best_val_masked_mse, best_anomaly_auc, epsilon=1e-6):
-    current_masked_mse = float(validation_metrics['masked_mse'])
-    if current_masked_mse < best_val_masked_mse - epsilon:
+def is_better_checkpoint(validation_metrics, best_metrics, epsilon=1e-6):
+    current_combined_masked_mse = float(validation_metrics['combined_masked_mse'])
+    best_combined_masked_mse = float(best_metrics.get('combined_masked_mse', float('inf')))
+    if current_combined_masked_mse < best_combined_masked_mse - epsilon:
         return True
-    if math.isclose(current_masked_mse, best_val_masked_mse, rel_tol=0.0, abs_tol=epsilon):
-        return _auc_for_selection(validation_metrics.get('anomaly_auc')) > _auc_for_selection(best_anomaly_auc)
+    if math.isclose(current_combined_masked_mse, best_combined_masked_mse, rel_tol=0.0, abs_tol=epsilon):
+        current_pr_auc = _metric_for_selection(validation_metrics.get('pr_auc'))
+        best_pr_auc = _metric_for_selection(best_metrics.get('pr_auc'))
+        if current_pr_auc > best_pr_auc + epsilon:
+            return True
+        if math.isclose(current_pr_auc, best_pr_auc, rel_tol=0.0, abs_tol=epsilon):
+            current_auc = _metric_for_selection(validation_metrics.get('anomaly_auc'))
+            best_auc = _metric_for_selection(best_metrics.get('anomaly_auc'))
+            if current_auc > best_auc + epsilon:
+                return True
+            if math.isclose(current_auc, best_auc, rel_tol=0.0, abs_tol=epsilon):
+                current_masked_mse = float(validation_metrics['masked_mse'])
+                best_masked_mse = float(best_metrics.get('masked_mse', float('inf')))
+                return current_masked_mse < best_masked_mse - epsilon
     return False
 
 
@@ -187,7 +226,7 @@ def compute_best_f1_metrics(labels, scores):
     }
 
 
-def evaluate(model, data_loader, device, mae_mask_ratio):
+def evaluate(model, data_loader, device, mae_mask_ratio, validation_mask_seed=None, apply_mfm=False):
     model.eval()
     metrics = {
         'loss': 0.0,
@@ -198,13 +237,22 @@ def evaluate(model, data_loader, device, mae_mask_ratio):
     anomaly_labels = []
 
     with torch.no_grad():
-        for batch in tqdm(data_loader, total=len(data_loader), desc='Validation', leave=False, file=sys.stdout):
+        for batch_index, batch in enumerate(tqdm(data_loader, total=len(data_loader), desc='Validation', leave=False, file=sys.stdout)):
             cont = batch['continuous'].to(device, non_blocking=True)
             cat = batch['categorical'].to(device, non_blocking=True)
             labels = batch['label'].to(device, non_blocking=True)
 
-            validation_mask = build_validation_mask(cont.shape[0], cont.shape[1], mae_mask_ratio, device)
-            reconstructed, spatial_mask = model(cont, cat, spatial_mask=validation_mask, apply_mfm=False)
+            if validation_mask_seed is None:
+                validation_mask = build_validation_mask(cont.shape[0], cont.shape[1], mae_mask_ratio, device)
+            else:
+                validation_mask = build_fixed_validation_mask(
+                    cont.shape[0],
+                    cont.shape[1],
+                    mae_mask_ratio,
+                    device,
+                    seed=validation_mask_seed + batch_index,
+                )
+            reconstructed, spatial_mask = model(cont, cat, spatial_mask=validation_mask, apply_mfm=apply_mfm)
             batch_metrics = compute_reconstruction_metrics(reconstructed, cont, spatial_mask)
 
             metrics['loss'] += batch_metrics['train_loss'].item()
@@ -234,10 +282,49 @@ def evaluate(model, data_loader, device, mae_mask_ratio):
         metrics['anomaly_auc'] = compute_binary_auroc(labels, scores)
     else:
         metrics['anomaly_auc'] = float('nan')
+    metrics['pr_auc'] = compute_binary_pr_auc(labels, scores)
 
     metrics.update(compute_best_f1_metrics(labels, scores))
 
     return metrics
+
+
+def combine_validation_metrics(mae_metrics, mfm_metrics):
+    combined = dict(mae_metrics)
+    combined['mae_metrics'] = mae_metrics
+    combined['mfm_metrics'] = mfm_metrics
+    combined['combined_masked_mse'] = float(mae_metrics['masked_mse'] + mfm_metrics['masked_mse'])
+    combined['combined_loss'] = float(mae_metrics['loss'] + mfm_metrics['loss'])
+    combined['mfm_masked_mse'] = float(mfm_metrics['masked_mse'])
+    combined['mfm_full_mse'] = float(mfm_metrics['full_mse'])
+    combined['mfm_loss'] = float(mfm_metrics['loss'])
+    combined['mfm_anomaly_auc'] = float(mfm_metrics['anomaly_auc'])
+    combined['mfm_pr_auc'] = float(mfm_metrics['pr_auc'])
+    combined['mfm_best_f1'] = float(mfm_metrics['best_f1'])
+    combined['mfm_best_precision'] = float(mfm_metrics['best_precision'])
+    combined['mfm_best_recall'] = float(mfm_metrics['best_recall'])
+    combined['mfm_best_threshold'] = float(mfm_metrics['best_threshold'])
+    return combined
+
+
+def evaluate_both_masks(model, data_loader, device, mae_mask_ratio, mfm_mask_ratio, mae_seed, mfm_seed):
+    mae_metrics = evaluate(
+        model,
+        data_loader,
+        device,
+        mae_mask_ratio,
+        validation_mask_seed=mae_seed,
+        apply_mfm=False,
+    )
+    mfm_metrics = evaluate(
+        model,
+        data_loader,
+        device,
+        mfm_mask_ratio,
+        validation_mask_seed=mfm_seed,
+        apply_mfm=True,
+    )
+    return combine_validation_metrics(mae_metrics, mfm_metrics)
 
 def train_foundation():
     print("running train_foundation()...")
@@ -252,7 +339,11 @@ def train_foundation():
     CLIP_VALUE = 5.0
     NUM_WORKERS = min(8, os.cpu_count() or 1)
     DATA_SIGNATURE = 'grouped_chronological_v1'
+    INITIAL_TRAIN_MAE_MASK_RATIO, INITIAL_TRAIN_MFM_MASK_RATIO = get_progressive_ratios(0)
     VALIDATION_MAE_MASK_RATIO = 0.30
+    VALIDATION_MFM_MASK_RATIO = 0.10
+    VALIDATION_MAE_MASK_SEED = 42
+    VALIDATION_MFM_MASK_SEED = 142
     
     TRAIN_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/train"
     VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
@@ -305,8 +396,8 @@ def train_foundation():
         num_cont_features=NUM_CONT, 
         cat_vocab_sizes=CAT_VOCABS,
         seq_len=SEQ_LEN,
-        init_mae=0.10,
-        init_mfm=0.00
+        init_mae=INITIAL_TRAIN_MAE_MASK_RATIO,
+        init_mfm=INITIAL_TRAIN_MFM_MASK_RATIO
     ).to(DEVICE)
 
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
@@ -339,11 +430,16 @@ def train_foundation():
             start_epoch = checkpoint['epoch'] + 1
             best_metrics = {
                 'masked_mse': checkpoint.get('best_val_masked_mse', float('inf')),
+                'mfm_masked_mse': checkpoint.get('best_mfm_masked_mse', checkpoint.get('best_val_masked_mse', float('inf'))),
+                'combined_masked_mse': checkpoint.get('best_combined_masked_mse', checkpoint.get('best_val_masked_mse', float('inf'))),
                 'anomaly_auc': checkpoint.get('best_anomaly_auc', float('-inf')),
-                'best_f1': checkpoint.get('best_f1', float('nan')),
-                'best_precision': checkpoint.get('best_precision', float('nan')),
-                'best_recall': checkpoint.get('best_recall', float('nan')),
-                'best_threshold': checkpoint.get('best_threshold', float('nan')),
+                'pr_auc': checkpoint.get('best_pr_auc_running', checkpoint.get('pr_auc', float('nan'))),
+                'best_f1': checkpoint.get('best_f1_running', checkpoint.get('best_f1', float('nan'))),
+                'best_precision': checkpoint.get('best_precision_running', checkpoint.get('best_precision', float('nan'))),
+                'best_recall': checkpoint.get('best_recall_running', checkpoint.get('best_recall', float('nan'))),
+                'best_threshold': checkpoint.get('best_threshold_running', checkpoint.get('best_threshold', float('nan'))),
+                'mfm_anomaly_auc': checkpoint.get('mfm_anomaly_auc', float('nan')),
+                'mfm_pr_auc': checkpoint.get('mfm_pr_auc', float('nan')),
             }
             print(f" Reprise prête à partir de l'époque {start_epoch + 1}/{EPOCHS}")
         else:
@@ -355,7 +451,7 @@ def train_foundation():
     for epoch in range(start_epoch, EPOCHS):
         model.train()
         
-        # Application du Curriculum Learning (Manquant dans le code 2, rajouté ici)
+        # Progressive MAE + MFM corruption during every training epoch.
         mae_r, mfm_r = get_progressive_ratios(epoch)
         model.mae_mask_ratio = mae_r
         model.mfm_layer.mask_ratio = mfm_r
@@ -395,7 +491,15 @@ def train_foundation():
                     "MFM": f"{mfm_r:.2f}"
                 })
 
-        validation_metrics = evaluate(model, validation_loader, DEVICE, VALIDATION_MAE_MASK_RATIO)
+        validation_metrics = evaluate_both_masks(
+            model,
+            validation_loader,
+            DEVICE,
+            VALIDATION_MAE_MASK_RATIO,
+            VALIDATION_MFM_MASK_RATIO,
+            VALIDATION_MAE_MASK_SEED,
+            VALIDATION_MFM_MASK_SEED,
+        )
         train_loss = epoch_loss / len(train_loader)
         train_masked_mse = epoch_masked_mse / len(train_loader)
         train_full_mse = epoch_full_mse / len(train_loader)
@@ -404,27 +508,16 @@ def train_foundation():
             is_best_checkpoint = True
             best_metrics = validation_metrics
         else:
-            current_f1 = float(validation_metrics.get('best_f1', float('nan')))
-            best_f1 = float(best_metrics.get('best_f1', float('nan')))
-            if np.isfinite(current_f1) and (not np.isfinite(best_f1) or current_f1 > best_f1 + 1e-6):
-                is_best_checkpoint = True
-            elif np.isfinite(current_f1) and np.isfinite(best_f1) and math.isclose(current_f1, best_f1, rel_tol=0.0, abs_tol=1e-6):
-                current_auc = _auc_for_selection(validation_metrics.get('anomaly_auc'))
-                best_auc = _auc_for_selection(best_metrics.get('anomaly_auc'))
-                if current_auc > best_auc + 1e-6:
-                    is_best_checkpoint = True
-                elif math.isclose(current_auc, best_auc, rel_tol=0.0, abs_tol=1e-6):
-                    is_best_checkpoint = float(validation_metrics['masked_mse']) < float(best_metrics.get('masked_mse', float('inf'))) - 1e-6
-                else:
-                    is_best_checkpoint = False
-            else:
-                is_best_checkpoint = False
+            is_best_checkpoint = is_better_checkpoint(validation_metrics, best_metrics)
 
             if is_best_checkpoint:
                 best_metrics = validation_metrics
 
         current_best_val_masked_mse = best_metrics['masked_mse']
+        current_best_mfm_masked_mse = best_metrics.get('mfm_masked_mse', float('inf'))
+        current_best_combined_masked_mse = best_metrics.get('combined_masked_mse', float('inf'))
         current_best_anomaly_auc = best_metrics['anomaly_auc']
+        current_best_pr_auc = best_metrics.get('pr_auc', float('nan'))
         current_best_f1 = best_metrics.get('best_f1', float('nan'))
         current_best_precision = best_metrics.get('best_precision', float('nan'))
         current_best_recall = best_metrics.get('best_recall', float('nan'))
@@ -441,20 +534,38 @@ def train_foundation():
             'train_masked_mse': train_masked_mse,
             'train_full_mse': train_full_mse,
             'val_loss': validation_metrics['loss'],
+            'val_mfm_loss': validation_metrics['mfm_loss'],
+            'val_combined_loss': validation_metrics['combined_loss'],
             'val_masked_mse': validation_metrics['masked_mse'],
+            'val_mfm_masked_mse': validation_metrics['mfm_masked_mse'],
+            'val_combined_masked_mse': validation_metrics['combined_masked_mse'],
             'val_full_mse': validation_metrics['full_mse'],
+            'val_mfm_full_mse': validation_metrics['mfm_full_mse'],
             'anomaly_auc': validation_metrics['anomaly_auc'],
+            'mfm_anomaly_auc': validation_metrics['mfm_anomaly_auc'],
+            'pr_auc': validation_metrics['pr_auc'],
+            'mfm_pr_auc': validation_metrics['mfm_pr_auc'],
             'best_f1': validation_metrics['best_f1'],
             'best_precision': validation_metrics['best_precision'],
             'best_recall': validation_metrics['best_recall'],
             'best_threshold': validation_metrics['best_threshold'],
+            'mfm_best_f1': validation_metrics['mfm_best_f1'],
+            'mfm_best_precision': validation_metrics['mfm_best_precision'],
+            'mfm_best_recall': validation_metrics['mfm_best_recall'],
+            'mfm_best_threshold': validation_metrics['mfm_best_threshold'],
             'best_val_masked_mse': current_best_val_masked_mse,
+            'best_mfm_masked_mse': current_best_mfm_masked_mse,
+            'best_combined_masked_mse': current_best_combined_masked_mse,
             'best_anomaly_auc': current_best_anomaly_auc,
+            'best_pr_auc_running': current_best_pr_auc,
             'best_f1_running': current_best_f1,
             'best_precision_running': current_best_precision,
             'best_recall_running': current_best_recall,
             'best_threshold_running': current_best_threshold,
+            'train_mae_mask_ratio': mae_r,
+            'train_mfm_mask_ratio': mfm_r,
             'validation_mae_mask_ratio': VALIDATION_MAE_MASK_RATIO,
+            'validation_mfm_mask_ratio': VALIDATION_MFM_MASK_RATIO,
             'data_signature': DATA_SIGNATURE,
         }, checkpoint_path)
 
@@ -466,24 +577,41 @@ def train_foundation():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'val_masked_mse': validation_metrics['masked_mse'],
+                'val_mfm_masked_mse': validation_metrics['mfm_masked_mse'],
+                'val_combined_masked_mse': validation_metrics['combined_masked_mse'],
                 'val_full_mse': validation_metrics['full_mse'],
+                'val_mfm_full_mse': validation_metrics['mfm_full_mse'],
                 'anomaly_auc': validation_metrics['anomaly_auc'],
+                'mfm_anomaly_auc': validation_metrics['mfm_anomaly_auc'],
+                'pr_auc': validation_metrics['pr_auc'],
+                'mfm_pr_auc': validation_metrics['mfm_pr_auc'],
                 'best_f1': validation_metrics['best_f1'],
                 'best_precision': validation_metrics['best_precision'],
                 'best_recall': validation_metrics['best_recall'],
                 'best_threshold': validation_metrics['best_threshold'],
+                'mfm_best_f1': validation_metrics['mfm_best_f1'],
+                'mfm_best_precision': validation_metrics['mfm_best_precision'],
+                'mfm_best_recall': validation_metrics['mfm_best_recall'],
+                'mfm_best_threshold': validation_metrics['mfm_best_threshold'],
+                'train_mae_mask_ratio': mae_r,
+                'train_mfm_mask_ratio': mfm_r,
                 'validation_mae_mask_ratio': VALIDATION_MAE_MASK_RATIO,
+                'validation_mfm_mask_ratio': VALIDATION_MFM_MASK_RATIO,
                 'data_signature': DATA_SIGNATURE,
             }, best_checkpoint_path)
         
         print(
             f" Epoch {epoch+1} complete. "
             f"TrainLoss: {train_loss:.6f} | TrainMaskedMSE: {train_masked_mse:.6f} | "
-            f"ValMaskedMSE: {validation_metrics['masked_mse']:.6f} | "
+            f"ValMAE_MaskedMSE: {validation_metrics['masked_mse']:.6f} | "
+            f"ValMFM_MaskedMSE: {validation_metrics['mfm_masked_mse']:.6f} | "
+            f"ValCombinedMaskedMSE: {validation_metrics['combined_masked_mse']:.6f} | "
             f"ValFullMSE: {validation_metrics['full_mse']:.6f} | "
+            f"PRAUC: {validation_metrics['pr_auc']:.4f} | "
+            f"MFM_PRAUC: {validation_metrics['mfm_pr_auc']:.4f} | "
             f"AUC: {validation_metrics['anomaly_auc']:.4f} | "
             f"F1: {validation_metrics['best_f1']:.4f} | "
-            f"ValMaskRatio: {VALIDATION_MAE_MASK_RATIO:.2f} | Checkpoint: {checkpoint_path}"
+            f"MaskRatio Train/Val(MAE/MFM): {mae_r:.2f}/{mfm_r:.2f} | {VALIDATION_MAE_MASK_RATIO:.2f}/{VALIDATION_MFM_MASK_RATIO:.2f} | Checkpoint: {checkpoint_path}"
         )
         print(
             f" Validation score gap -> benign: {validation_metrics['benign_score_mean']:.6f}, "

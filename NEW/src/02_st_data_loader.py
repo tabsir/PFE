@@ -7,7 +7,15 @@ import os
 
 
 class SpatioTemporalNIDSDataset(Dataset):
-    def __init__(self, arrow_dir_path, stats_path="nids_normalization_stats.json", seq_len=32, stride=None, clip_value=5.0):
+    def __init__(
+        self,
+        arrow_dir_path,
+        stats_path="nids_normalization_stats.json",
+        seq_len=32,
+        stride=16,
+        clip_value=5.0,
+        rebuild_sequence_cache=False,
+    ):
         if not os.path.exists(arrow_dir_path):
             raise FileNotFoundError(f"Dataset introuvable à : {arrow_dir_path}")
         if not os.path.exists(stats_path):
@@ -22,6 +30,7 @@ class SpatioTemporalNIDSDataset(Dataset):
             arrow_dir_path,
             f"sequence_ranges_seq{self.seq_len}_stride{self.stride}.npy"
         )
+        self.rebuild_sequence_cache = rebuild_sequence_cache
         
         # 2. Chargement des vecteurs de normalisation
         with open(stats_path, "r") as f:
@@ -47,8 +56,11 @@ class SpatioTemporalNIDSDataset(Dataset):
         self.num_sequences = len(self.sequence_ranges)
 
     def _load_or_build_sequence_ranges(self):
-        if os.path.exists(self.sequence_cache_path):
+        if not self.rebuild_sequence_cache and os.path.exists(self.sequence_cache_path):
             return np.load(self.sequence_cache_path)
+
+        if self.rebuild_sequence_cache and os.path.exists(self.sequence_cache_path):
+            print(f"  Rebuilding sequence cache: {self.sequence_cache_path}", flush=True)
 
         sequence_ranges = np.asarray(self._build_sequence_ranges(), dtype=np.int64)
         np.save(self.sequence_cache_path, sequence_ranges)

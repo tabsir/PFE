@@ -39,8 +39,10 @@ DEFAULT_VALID_DIR = "/home/aka/PFE-code/NEW/data/nids_src_grouped/validation"
 DEFAULT_TEST_DIR  = "/home/aka/PFE-code/NEW/data/nids_src_grouped/test"
 DEFAULT_STATS_PATH = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05"
-DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best_04.1.pt"
+DEFAULT_FOUNDATION_CHECKPOINT     = "/home/aka/PFE-code/NEW/checkpoints/stt_best.pt"
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 5
+DEFAULT_TRAIN_TARGET_POSITIVE_RATE = 0.20
+DEFAULT_THRESHOLD_TARGET_RECALL = 0.85
 
 PROJECT_ATTACK_FAMILY_ORDER = [
     "DoS / DDoS",
@@ -109,6 +111,41 @@ def parse_args():
         "--enable-future-task",
         action="store_true",
         help="Enable the future-attack prediction head and include it in training and model selection.",
+    )
+    parser.add_argument(
+        "--seq-len",
+        type=int,
+        default=32,
+        help="Sequence length for downstream windows. Changing this from 32 changes the experiment and may require cache rebuilds.",
+    )
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=16,
+        help="Stride used to build downstream windows.",
+    )
+    parser.add_argument(
+        "--current-label-rule",
+        choices=["any_attack", "last_half_attack"],
+        default="last_half_attack",
+        help="Rule used to mark a sequence window as malicious for the current attack task.",
+    )
+    parser.add_argument(
+        "--rebuild-caches",
+        action="store_true",
+        help="Ignore cached sequence windows and downstream targets, then rebuild them from the current split artifacts.",
+    )
+    parser.add_argument(
+        "--train-target-positive-rate",
+        type=float,
+        default=DEFAULT_TRAIN_TARGET_POSITIVE_RATE,
+        help="Target positive rate seen by the training sampler. Set below 0.5 to avoid near-balanced attack oversampling.",
+    )
+    parser.add_argument(
+        "--threshold-target-recall",
+        type=float,
+        default=DEFAULT_THRESHOLD_TARGET_RECALL,
+        help="Recall target used to pick the current-attack operating threshold on validation.",
     )
     parser.add_argument("--epochs", type=int, default=20, help="Number of downstream training epochs.")
     parser.add_argument("--batch-size", type=int, default=512, help="Batch size for downstream training.")
@@ -179,15 +216,37 @@ def compute_binary_auroc(labels, scores):
     return float(auc)
 
 
+def compute_binary_pr_auc(labels, scores):
+    labels = np.asarray(labels, dtype=np.int64)
+    scores = np.asarray(scores, dtype=np.float64)
+
+    positive_count = int((labels == 1).sum())
+    if labels.size == 0 or positive_count == 0:
+        return float("nan")
+
+    order = np.argsort(scores)[::-1]
+    sorted_labels = labels[order]
+    true_positives = np.cumsum(sorted_labels == 1)
+    false_positives = np.cumsum(sorted_labels == 0)
+
+    precision = true_positives / np.maximum(true_positives + false_positives, 1)
+    recall = true_positives / positive_count
+    precision = np.concatenate([[1.0], precision])
+    recall = np.concatenate([[0.0], recall])
+    return float(np.trapezoid(precision, recall))
+
+
 def compute_binary_metrics(labels, probabilities, threshold):
     labels = np.asarray(labels, dtype=np.int64)
     probabilities = np.asarray(probabilities, dtype=np.float64)
     if labels.size == 0:
         return {
             "auc": float("nan"),
+            "pr_auc": float("nan"),
             "precision": float("nan"),
             "recall": float("nan"),
             "f1": float("nan"),
+            "false_positive_rate": float("nan"),
             "positive_rate": float("nan"),
         }
 
@@ -195,6 +254,7 @@ def compute_binary_metrics(labels, probabilities, threshold):
     true_positive = int(np.logical_and(predictions == 1, labels == 1).sum())
     false_positive = int(np.logical_and(predictions == 1, labels == 0).sum())
     false_negative = int(np.logical_and(predictions == 0, labels == 1).sum())
+    true_negative = int(np.logical_and(predictions == 0, labels == 0).sum())
 
     precision = true_positive / max(true_positive + false_positive, 1)
     recall = true_positive / max(true_positive + false_negative, 1)
@@ -204,11 +264,15 @@ def compute_binary_metrics(labels, probabilities, threshold):
         f1 = 2 * precision * recall / (precision + recall)
 
     auc = compute_binary_auroc(labels, probabilities) if np.unique(labels).size > 1 else float("nan")
+    pr_auc = compute_binary_pr_auc(labels, probabilities)
+    false_positive_rate = false_positive / max(false_positive + true_negative, 1)
     return {
         "auc": auc,
+        "pr_auc": pr_auc,
         "precision": float(precision),
         "recall": float(recall),
         "f1": float(f1),
+        "false_positive_rate": float(false_positive_rate),
         "positive_rate": float(labels.mean()),
     }
 
@@ -220,6 +284,28 @@ def build_pos_weight(binary_targets):
     if positives == 0:
         return 1.0
     return max(negatives / positives, 1.0)
+
+
+def build_target_rate_sample_weights(binary_targets, target_positive_rate):
+    binary_targets = np.asarray(binary_targets, dtype=np.int64)
+    if binary_targets.size == 0:
+        return np.array([], dtype=np.float32), 0.0, 0.0
+
+    positives = int(binary_targets.sum())
+    negatives = int(binary_targets.size - positives)
+    observed_positive_rate = positives / binary_targets.size
+
+    if positives == 0 or negatives == 0:
+        weights = np.ones(binary_targets.size, dtype=np.float32)
+        return weights, float(observed_positive_rate), float(observed_positive_rate)
+
+    positive_weight = (
+        target_positive_rate * negatives
+        / max(positives * (1.0 - target_positive_rate), 1e-12)
+    )
+    weights = np.where(binary_targets == 1, positive_weight, 1.0).astype(np.float32)
+    effective_positive_rate = float(weights[binary_targets == 1].sum() / max(weights.sum(), 1e-12))
+    return weights, float(observed_positive_rate), effective_positive_rate
 
 
 class FocalLoss(nn.Module):
@@ -239,18 +325,30 @@ class FocalLoss(nn.Module):
         return loss.mean()
 
 
-def sweep_best_f1_threshold(labels, probabilities):
-    """Sweep probability thresholds to find the operating point with maximum F1."""
+def select_threshold_for_target_recall(labels, probabilities, target_recall):
+    """Pick the most precise threshold that still satisfies the requested recall."""
     labels = np.asarray(labels, dtype=np.int64)
     probs = np.asarray(probabilities, dtype=np.float64)
     if labels.size == 0 or int(labels.sum()) == 0:
-        return 0.5, 0.0, 0.0, 0.0
+        return {
+            "threshold": 0.5,
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "meets_target_recall": False,
+            "selection_policy": "precision_at_target_recall",
+            "target_recall": float(target_recall),
+        }
+
     candidates = np.unique(np.concatenate([
-        np.linspace(0.05, 0.95, 91),
-        np.percentile(probs, [10, 20, 30, 40, 50, 60, 70, 80, 90]),
+        np.linspace(0.0, 1.0, 101),
+        np.percentile(probs, [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]),
+        probs,
     ]))
-    best_f1, best_thresh, best_precision, best_recall = 0.0, 0.5, 0.0, 0.0
-    for t in candidates:
+
+    selected = None
+    fallback = None
+    for t in np.sort(candidates)[::-1]:
         preds = probs >= t
         tp = int(np.logical_and(preds, labels == 1).sum())
         fp = int(np.logical_and(preds, labels == 0).sum())
@@ -258,10 +356,34 @@ def sweep_best_f1_threshold(labels, probabilities):
         precision = tp / max(tp + fp, 1)
         recall = tp / max(tp + fn, 1)
         f1 = 2.0 * precision * recall / max(precision + recall, 1e-9)
-        if f1 > best_f1:
-            best_f1, best_thresh = f1, float(t)
-            best_precision, best_recall = precision, recall
-    return float(best_thresh), float(best_f1), float(best_precision), float(best_recall)
+        record = {
+            "threshold": float(t),
+            "f1": float(f1),
+            "precision": float(precision),
+            "recall": float(recall),
+            "meets_target_recall": float(recall) >= float(target_recall),
+            "selection_policy": "precision_at_target_recall",
+            "target_recall": float(target_recall),
+        }
+
+        if fallback is None or (record["recall"], record["precision"], record["threshold"]) > (
+            fallback["recall"],
+            fallback["precision"],
+            fallback["threshold"],
+        ):
+            fallback = record
+
+        if not record["meets_target_recall"]:
+            continue
+
+        if selected is None or (record["precision"], record["threshold"], record["f1"]) > (
+            selected["precision"],
+            selected["threshold"],
+            selected["f1"],
+        ):
+            selected = record
+
+    return selected or fallback
 
 
 class DownstreamNIDSDataset(Dataset):
@@ -272,14 +394,21 @@ class DownstreamNIDSDataset(Dataset):
         known_attack_to_idx=None,
         min_known_attack_count=100,
         max_sequences=None,
+        current_label_rule="last_half_attack",
+        rebuild_target_cache=False,
     ):
         self.base_dataset = base_dataset
         self.future_horizon_minutes = future_horizon_minutes
         self.future_horizon_ms = int(future_horizon_minutes * 60 * 1000)
         self.sequence_ranges = np.asarray(base_dataset.sequence_ranges[:max_sequences], dtype=np.int64)
         self.max_sequences = max_sequences
+        self.current_label_rule = current_label_rule
+        self.rebuild_target_cache = rebuild_target_cache
         self.cache_dir = os.path.dirname(base_dataset.sequence_cache_path)
-        cache_suffix = f"seq{base_dataset.seq_len}_stride{base_dataset.stride}_h{future_horizon_minutes}m"
+        cache_suffix = (
+            f"seq{base_dataset.seq_len}_stride{base_dataset.stride}_"
+            f"h{future_horizon_minutes}m_{self.current_label_rule}"
+        )
         if max_sequences is not None:
             cache_suffix += f"_first{max_sequences}"
         self.target_cache_path = os.path.join(self.cache_dir, f"downstream_targets_{cache_suffix}.npz")
@@ -329,7 +458,10 @@ class DownstreamNIDSDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.base_dataset[idx]
+        # Align the current-attack target with the downstream labeling rule.
         item.update({
+            "label": torch.tensor(self.sequence_current_labels[idx], dtype=torch.long),
+            "attack": self.raw_attack_names[int(self.sequence_attack_ids[idx])],
             "known_attack_id": torch.tensor(self.known_attack_targets[idx], dtype=torch.long),
             "future_attack": torch.tensor(self.future_attack_targets[idx], dtype=torch.float32),
             "future_lead_minutes": torch.tensor(self.future_lead_minutes[idx], dtype=torch.float32),
@@ -406,8 +538,18 @@ class DownstreamNIDSDataset(Dataset):
 
         return future_attack_targets, future_lead_minutes
 
+    def _window_has_current_attack(self, attack_offsets, window_len):
+        if attack_offsets.size == 0:
+            return False
+        if self.current_label_rule == "any_attack":
+            return True
+        if self.current_label_rule == "last_half_attack":
+            return bool((attack_offsets >= (window_len // 2)).any())
+        raise ValueError(f"Unsupported current_label_rule: {self.current_label_rule}")
+
     def _load_or_build_targets(self):
-        if os.path.exists(self.target_cache_path) and os.path.exists(self.target_meta_path):
+        if (not self.rebuild_target_cache and os.path.exists(self.target_cache_path)
+                and os.path.exists(self.target_meta_path)):
             print(f"Loading cached downstream targets: {self.target_cache_path}", flush=True)
             cached = np.load(self.target_cache_path)
             with open(self.target_meta_path, "r") as handle:
@@ -422,6 +564,9 @@ class DownstreamNIDSDataset(Dataset):
                 cached["future_lead_minutes"],
                 raw_attack_names,
             )
+
+        if self.rebuild_target_cache and os.path.exists(self.target_cache_path):
+            print(f"Rebuilding downstream target cache: {self.target_cache_path}", flush=True)
 
         print("Building downstream targets cache. This can take a while on the first run...", flush=True)
         row_limit = len(self.base_dataset.data)
@@ -454,9 +599,10 @@ class DownstreamNIDSDataset(Dataset):
             sequence_end_times[idx] = row_end_times[end_idx - 1]
             sequence_group_ids[idx] = row_group_ids[start_idx] if row_group_ids is not None else 0
 
-            if window_labels.max() > 0:
+            attack_offsets = np.flatnonzero(window_labels > 0)
+            if self._window_has_current_attack(attack_offsets, len(window_labels)):
                 sequence_current_labels[idx] = 1
-                last_attack_offset = np.flatnonzero(window_labels > 0)[-1]
+                last_attack_offset = int(attack_offsets[-1])
                 sequence_attack_ids[idx] = row_attack_ids[start_idx + last_attack_offset]
 
         future_attack_targets, future_lead_minutes = self._build_future_targets(
@@ -477,7 +623,14 @@ class DownstreamNIDSDataset(Dataset):
             future_lead_minutes=future_lead_minutes,
         )
         with open(self.target_meta_path, "w") as handle:
-            json.dump({"raw_attack_names": raw_attack_names}, handle, indent=2)
+            json.dump(
+                {
+                    "raw_attack_names": raw_attack_names,
+                    "current_label_rule": self.current_label_rule,
+                },
+                handle,
+                indent=2,
+            )
 
         print(f"Saved downstream targets cache: {self.target_cache_path}", flush=True)
 
@@ -629,14 +782,22 @@ def evaluate_downstream(model, data_loader, device, thresholds):
     current_labels = np.concatenate(current_targets) if current_targets else np.array([])
     current_metrics = compute_binary_metrics(current_labels, current_probabilities, thresholds["current"])
 
-    best_thresh, best_f1, best_prec, best_rec = sweep_best_f1_threshold(current_labels, current_probabilities)
-    best_current_metrics = {
-        "threshold": best_thresh,
-        "f1": best_f1,
-        "precision": best_prec,
-        "recall": best_rec,
-        "auc": current_metrics["auc"],
-    }
+    threshold_target_recall = getattr(
+        evaluate_downstream,
+        "threshold_target_recall",
+        DEFAULT_THRESHOLD_TARGET_RECALL,
+    )
+    threshold_selection = select_threshold_for_target_recall(
+        current_labels,
+        current_probabilities,
+        threshold_target_recall,
+    )
+    best_current_metrics = compute_binary_metrics(
+        current_labels,
+        current_probabilities,
+        threshold_selection["threshold"],
+    )
+    best_current_metrics.update(threshold_selection)
 
     future_probabilities = np.concatenate(future_probs) if future_probs else np.array([])
     future_labels = np.concatenate(future_targets) if future_targets else np.array([])
@@ -679,6 +840,21 @@ def load_foundation_checkpoint(backbone, checkpoint_path, device):
 
     checkpoint = load_trusted_checkpoint(checkpoint_path, device)
     state_dict = checkpoint.get("model_state_dict", checkpoint)
+    checkpoint_pos_encoder = state_dict.get("pos_encoder")
+    if checkpoint_pos_encoder is not None and checkpoint_pos_encoder.shape != backbone.pos_encoder.shape:
+        resized_pos_encoder = F.interpolate(
+            checkpoint_pos_encoder.transpose(1, 2),
+            size=backbone.pos_encoder.shape[1],
+            mode="linear",
+            align_corners=False,
+        ).transpose(1, 2)
+        state_dict = dict(state_dict)
+        state_dict["pos_encoder"] = resized_pos_encoder
+        print(
+            "Resized foundation positional encoder "
+            f"from seq_len={checkpoint_pos_encoder.shape[1]} to seq_len={backbone.pos_encoder.shape[1]}",
+            flush=True,
+        )
     missing_keys, unexpected_keys = backbone.load_state_dict(state_dict, strict=False)
     print(f"Loaded foundation checkpoint: {checkpoint_path}")
     if missing_keys:
@@ -711,6 +887,97 @@ def load_trusted_checkpoint(checkpoint_path, device):
     return torch.load(checkpoint_path, map_location=device, weights_only=False)
 
 
+def build_validation_rank(validation_metrics, future_task_enabled):
+    best_current = validation_metrics["best_current"]
+    future_metrics = validation_metrics["future"]
+    return (
+        float(np.nan_to_num(best_current["pr_auc"], nan=0.0)),
+        float(np.nan_to_num(best_current["f1"], nan=0.0)),
+        float(np.nan_to_num(best_current["recall"], nan=0.0)),
+        float(np.nan_to_num(future_metrics["pr_auc"], nan=0.0)) if future_task_enabled else 0.0,
+        float(np.nan_to_num(validation_metrics["known_family_accuracy"], nan=0.0)),
+        float(np.nan_to_num(validation_metrics["unknown_warning_recall"], nan=0.0)),
+        float(np.nan_to_num(best_current["auc"], nan=0.0)),
+    )
+
+
+def load_best_validation_rank(checkpoint_dir, device, fallback_rank):
+    best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
+    if not best_checkpoint_path.exists():
+        return fallback_rank
+
+    try:
+        best_checkpoint = load_trusted_checkpoint(best_checkpoint_path, device)
+        stored_rank = best_checkpoint.get("validation_rank")
+        if stored_rank is not None:
+            return tuple(float(value) for value in stored_rank)
+
+        validation_metrics = best_checkpoint.get("validation_metrics")
+        if validation_metrics is not None:
+            return build_validation_rank(
+                validation_metrics,
+                bool(best_checkpoint.get("future_task_enabled", True)),
+            )
+
+        fallback_score = float(best_checkpoint.get("validation_score", fallback_rank[0]))
+        return (fallback_score, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    except Exception as exc:
+        print(f"Warning: could not load best checkpoint {best_checkpoint_path}: {exc}", flush=True)
+        return fallback_rank
+
+
+def ensure_checkpoint_dir_compatible(
+    checkpoint_dir,
+    seq_len,
+    stride,
+    current_label_rule,
+    future_task_enabled,
+    train_target_positive_rate,
+    threshold_target_recall,
+    device,
+):
+    best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
+    if not best_checkpoint_path.exists():
+        return
+
+    checkpoint = load_trusted_checkpoint(best_checkpoint_path, device)
+    expected_config = {
+        "seq_len": seq_len,
+        "stride": stride,
+        "current_label_rule": current_label_rule,
+        "future_task_enabled": future_task_enabled,
+        "train_target_positive_rate": train_target_positive_rate,
+        "threshold_target_recall": threshold_target_recall,
+    }
+    mismatches = []
+    missing_fields = []
+
+    for field_name, expected_value in expected_config.items():
+        existing_value = checkpoint.get(field_name)
+        if existing_value is None:
+            missing_fields.append(field_name)
+            continue
+        if existing_value != expected_value:
+            mismatches.append(
+                f"{field_name}={existing_value!r} in {best_checkpoint_path.name} vs requested {expected_value!r}"
+            )
+
+    if mismatches:
+        mismatch_summary = "; ".join(mismatches)
+        raise ValueError(
+            "Output directory already contains downstream checkpoints for a different configuration. "
+            "Use a fresh --output-dir or resume the matching run. "
+            f"{mismatch_summary}"
+        )
+
+    if missing_fields:
+        print(
+            "Warning: existing best checkpoint is missing configuration metadata "
+            f"{missing_fields}; directory compatibility could not be fully verified.",
+            flush=True,
+        )
+
+
 def extract_epoch_index(checkpoint_path):
     try:
         return int(Path(checkpoint_path).stem.rsplit("_", 1)[-1])
@@ -741,26 +1008,14 @@ def resolve_resume_checkpoint(resume_value, device):
     return resume_path, checkpoint
 
 
-def load_best_validation_score(checkpoint_dir, device, fallback_score):
-    best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
-    if not best_checkpoint_path.exists():
-        return fallback_score
-
-    try:
-        best_checkpoint = load_trusted_checkpoint(best_checkpoint_path, device)
-        return float(best_checkpoint.get("validation_score", fallback_score))
-    except Exception as exc:
-        print(f"Warning: could not load best checkpoint {best_checkpoint_path}: {exc}", flush=True)
-        return fallback_score
-
-
 def train_multitask_nids():
     args = parse_args()
     print("Starting downstream NIDS training...", flush=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     epochs = args.epochs
     batch_size = args.batch_size
-    seq_len = 32
+    seq_len = args.seq_len
+    stride = args.stride
     clip_value = 5.0
     warmup_epochs = 2
     freeze_backbone_epochs = 2
@@ -771,6 +1026,19 @@ def train_multitask_nids():
     min_known_attack_count = args.min_known_attack_count
     future_task_enabled = args.enable_future_task
     num_workers = args.num_workers
+    current_label_rule = args.current_label_rule
+    rebuild_caches = args.rebuild_caches
+    train_target_positive_rate = args.train_target_positive_rate
+    threshold_target_recall = args.threshold_target_recall
+
+    if not 0.0 < train_target_positive_rate < 1.0:
+        raise ValueError(
+            f"train_target_positive_rate must be in (0, 1), got {train_target_positive_rate}"
+        )
+    if not 0.0 < threshold_target_recall <= 1.0:
+        raise ValueError(
+            f"threshold_target_recall must be in (0, 1], got {threshold_target_recall}"
+        )
 
     loss_weights = {
         "current": 2.0, #detect attack is the primary task, so it gets the highest weight
@@ -795,6 +1063,21 @@ def train_multitask_nids():
     print(f"Foundation checkpoint: {foundation_checkpoint}", flush=True)
     print(f"Downstream output directory: {checkpoint_dir}", flush=True)
     print(f"Future task enabled: {future_task_enabled}", flush=True)
+    print(f"Window config: seq_len={seq_len}, stride={stride}", flush=True)
+    print(f"Current label rule: {current_label_rule}", flush=True)
+    print(f"Train target positive rate: {train_target_positive_rate:.3f}", flush=True)
+    print(f"Threshold target recall: {threshold_target_recall:.3f}", flush=True)
+    print(f"Rebuild caches: {rebuild_caches}", flush=True)
+    ensure_checkpoint_dir_compatible(
+        checkpoint_dir,
+        seq_len,
+        stride,
+        current_label_rule,
+        future_task_enabled,
+        train_target_positive_rate,
+        threshold_target_recall,
+        device,
+    )
 
     validation_path = valid_dir if os.path.exists(valid_dir) else TEST_DIR
     if validation_path == TEST_DIR:
@@ -805,8 +1088,9 @@ def train_multitask_nids():
         arrow_dir_path=train_dir,
         stats_path=stats_path,
         seq_len=seq_len,
-        stride=16,
+        stride=stride,
         clip_value=clip_value,
+        rebuild_sequence_cache=rebuild_caches,
     )
     print(f"Base train dataset ready: {len(train_base_dataset)} sequences", flush=True)
 
@@ -815,8 +1099,9 @@ def train_multitask_nids():
         arrow_dir_path=validation_path,
         stats_path=stats_path,
         seq_len=seq_len,
-        stride=16,
+        stride=stride,
         clip_value=clip_value,
+        rebuild_sequence_cache=rebuild_caches,
     )
     print(f"Base validation dataset ready: {len(valid_base_dataset)} sequences", flush=True)
 
@@ -825,6 +1110,8 @@ def train_multitask_nids():
         train_base_dataset,
         future_horizon_minutes=future_horizon_minutes,
         min_known_attack_count=min_known_attack_count,
+        current_label_rule=current_label_rule,
+        rebuild_target_cache=rebuild_caches,
     )
     print(f"Downstream train dataset ready: {len(train_dataset)} sequences", flush=True)
     print(f"Mapped attack families in train: {dict(train_dataset.attack_family_counts)}", flush=True)
@@ -835,6 +1122,8 @@ def train_multitask_nids():
         valid_base_dataset,
         future_horizon_minutes=future_horizon_minutes,
         known_attack_to_idx=train_dataset.known_attack_to_idx,
+        current_label_rule=current_label_rule,
+        rebuild_target_cache=rebuild_caches,
     )
     print(f"Downstream validation dataset ready: {len(valid_dataset)} sequences", flush=True)
     print(f"Mapped attack families in validation: {dict(valid_dataset.attack_family_counts)}", flush=True)
@@ -843,18 +1132,22 @@ def train_multitask_nids():
     with open(attack_vocab_path, "w") as handle:
         json.dump({"known_attack_labels": train_dataset.known_attack_names}, handle, indent=2)
 
-    # WeightedRandomSampler: attack sequences drawn ~as often as benign ones
     _labels = train_dataset.sequence_current_labels.astype(np.float32)
-    _pos_rate = float(_labels.mean())
-    _sample_weights = np.where(
-        _labels == 1,
-        (1.0 - _pos_rate) / max(_pos_rate, 1e-6),   # weight for attacks
-        1.0,                                           # weight for benign
-    ).astype(np.float32)
+    _sample_weights, observed_positive_rate, effective_positive_rate = build_target_rate_sample_weights(
+        _labels,
+        train_target_positive_rate,
+    )
     _sampler = WeightedRandomSampler(
         weights=torch.from_numpy(_sample_weights),
         num_samples=len(_sample_weights),
         replacement=True,
+    )
+    print(
+        "Train sampler configured: "
+        f"observed_positive_rate={observed_positive_rate:.4f}, "
+        f"target_positive_rate={train_target_positive_rate:.4f}, "
+        f"effective_positive_rate={effective_positive_rate:.4f}",
+        flush=True,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -922,6 +1215,7 @@ def train_multitask_nids():
     evaluate_downstream.future_loss_fn = future_loss_fn
     evaluate_downstream.family_loss_fn = family_loss_fn
     evaluate_downstream.loss_weights = loss_weights
+    evaluate_downstream.threshold_target_recall = threshold_target_recall
 
     backbone_parameters = [parameter for parameter in model.backbone.parameters() if parameter.requires_grad]
     head_parameters = [
@@ -948,7 +1242,11 @@ def train_multitask_nids():
 
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     start_epoch = 0
-    best_score = -float("inf")
+    best_rank = (-float("inf"), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    best_rank = load_best_validation_rank(checkpoint_dir, device, best_rank)
+
+    if best_rank[0] > -float("inf"):
+        print(f"Existing best validation PR-AUC rank: {best_rank}", flush=True)
 
     if resume_checkpoint:
         resume_path, resume_state = resolve_resume_checkpoint(resume_checkpoint, device)
@@ -967,18 +1265,55 @@ def train_multitask_nids():
                 f"Requested future_task_enabled={future_task_enabled}"
             )
 
+        checkpoint_seq_len = int(resume_state.get("seq_len", 32))
+        checkpoint_stride = int(resume_state.get("stride", 16))
+        checkpoint_label_rule = str(resume_state.get("current_label_rule", "any_attack"))
+        if checkpoint_seq_len != seq_len or checkpoint_stride != stride or checkpoint_label_rule != current_label_rule:
+            raise ValueError(
+                "Resume checkpoint window configuration does not match the current configuration. "
+                f"Checkpoint seq_len={checkpoint_seq_len}, stride={checkpoint_stride}, label_rule={checkpoint_label_rule} | "
+                f"Requested seq_len={seq_len}, stride={stride}, label_rule={current_label_rule}"
+            )
+
+        checkpoint_train_target_positive_rate = resume_state.get("train_target_positive_rate")
+        if (
+            checkpoint_train_target_positive_rate is not None
+            and float(checkpoint_train_target_positive_rate) != float(train_target_positive_rate)
+        ):
+            raise ValueError(
+                "Resume checkpoint sampler configuration does not match the current configuration. "
+                f"Checkpoint train_target_positive_rate={checkpoint_train_target_positive_rate} | "
+                f"Requested train_target_positive_rate={train_target_positive_rate}"
+            )
+
+        checkpoint_threshold_target_recall = resume_state.get("threshold_target_recall")
+        if (
+            checkpoint_threshold_target_recall is not None
+            and float(checkpoint_threshold_target_recall) != float(threshold_target_recall)
+        ):
+            raise ValueError(
+                "Resume checkpoint threshold configuration does not match the current configuration. "
+                f"Checkpoint threshold_target_recall={checkpoint_threshold_target_recall} | "
+                f"Requested threshold_target_recall={threshold_target_recall}"
+            )
+
         model.load_state_dict(resume_state["model_state_dict"])
         optimizer.load_state_dict(resume_state["optimizer_state_dict"])
         scheduler.load_state_dict(resume_state["scheduler_state_dict"])
 
         foundation_checkpoint = resume_state.get("foundation_checkpoint", foundation_checkpoint)
         start_epoch = int(resume_state.get("epoch", -1)) + 1
-        resume_score = float(resume_state.get("validation_score", -float("inf")))
-        best_score = load_best_validation_score(checkpoint_dir, device, resume_score)
+        resume_metrics = resume_state.get("validation_metrics")
+        if resume_metrics is not None:
+            resume_rank = build_validation_rank(resume_metrics, future_task_enabled)
+        else:
+            resume_score = float(resume_state.get("validation_score", -float("inf")))
+            resume_rank = (resume_score, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        best_rank = load_best_validation_rank(checkpoint_dir, device, resume_rank)
 
         print(f"Resumed downstream training from {resume_path}", flush=True)
         print(f"Next epoch: {start_epoch + 1}/{epochs}", flush=True)
-        print(f"Current best validation score: {best_score:.6f}", flush=True)
+        print(f"Current best validation PR-AUC rank: {best_rank}", flush=True)
 
         if start_epoch >= epochs:
             print("Resume checkpoint already reached the requested total epoch count. Nothing to do.", flush=True)
@@ -1038,11 +1373,8 @@ def train_multitask_nids():
         validation_metrics = evaluate_downstream(model, valid_loader, device, thresholds)
         best_current = validation_metrics["best_current"]
         thresholds["current"] = best_current["threshold"]
-
-        validation_score = best_current["f1"] * 2.0 + np.nan_to_num(best_current["auc"], nan=0.0)
-        if future_task_enabled:
-            validation_score += np.nan_to_num(validation_metrics["future"]["auc"], nan=0.0)
-        validation_score += np.nan_to_num(validation_metrics["known_family_accuracy"], nan=0.0) * 0.5
+        validation_rank = build_validation_rank(validation_metrics, future_task_enabled)
+        validation_score = validation_rank[0]
 
         checkpoint_payload = {
             "epoch": epoch,
@@ -1054,17 +1386,23 @@ def train_multitask_nids():
             "known_attack_labels": train_dataset.known_attack_names,
             "future_horizon_minutes": future_horizon_minutes,
             "future_task_enabled": future_task_enabled,
+            "seq_len": seq_len,
+            "stride": stride,
+            "current_label_rule": current_label_rule,
+            "train_target_positive_rate": train_target_positive_rate,
+            "threshold_target_recall": threshold_target_recall,
             "thresholds": thresholds,
             "best_threshold": thresholds["current"],
             "validation_score": validation_score,
+            "validation_rank": list(validation_rank),
             "validation_metrics": validation_metrics,
         }
 
         epoch_checkpoint = os.path.join(checkpoint_dir, f"nids_multitask_epoch_{epoch + 1}.pt")
         atomic_torch_save(checkpoint_payload, epoch_checkpoint)
 
-        if validation_score > best_score:
-            best_score = validation_score
+        if validation_rank > best_rank:
+            best_rank = validation_rank
             best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
             atomic_torch_save(checkpoint_payload, best_checkpoint_path)
 
@@ -1073,11 +1411,13 @@ def train_multitask_nids():
             f" Downstream epoch {epoch + 1} complete. "
             f"BestThresh={best_c['threshold']:.3f} → "
             f"P={best_c['precision']:.4f} R={best_c['recall']:.4f} F1={best_c['f1']:.4f} | "
-            f"AUC={best_c['auc']:.4f} | "
+            f"AUC={best_c['auc']:.4f} PRAUC={best_c['pr_auc']:.4f} | "
+            f"BenignFPR={best_c['false_positive_rate']:.4f} | "
+            f"TargetRecall={best_c['target_recall']:.2f} Met={best_c['meets_target_recall']} | "
             f"KnownAcc={validation_metrics['known_family_accuracy']:.4f} | "
             f"UnknownRecall={validation_metrics['unknown_warning_recall']:.4f} | "
             f"FutureAUC={validation_metrics['future']['auc']:.4f} | "
-            f"Score={validation_score:.4f}"
+            f"ScorePRAUC={validation_score:.4f}"
         )
 
 

@@ -2,6 +2,7 @@ import numpy as np
 import json
 from datasets import load_from_disk
 import os
+from pathlib import Path
 
 def compute_global_statistics(arrow_dir_path, batch_size=500000):
     print(f"Initialisation du calcul des statistiques globales depuis {arrow_dir_path}...")
@@ -78,7 +79,7 @@ def compute_global_statistics(arrow_dir_path, batch_size=500000):
         "std": std.tolist()
     }
     
-    output_file = "nids_normalization_stats.json"
+    output_file = Path(__file__).resolve().parents[1] / "nids_normalization_stats.json"
     with open(output_file, "w") as f:
         json.dump(stats, f, indent=4)
         

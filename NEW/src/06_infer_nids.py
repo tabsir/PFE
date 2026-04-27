@@ -30,14 +30,21 @@ CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
 DEFAULT_CHECKPOINT = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05/nids_multitask_best.pt"
 DEFAULT_STATS      = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_DATA_ROOT  = "/home/aka/PFE-code/NEW/data/nids_src_grouped"
+DEFAULT_SEQ_LEN    = 32
+DEFAULT_STRIDE     = 16
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run downstream NIDS inference and print human-readable alerts.")
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="Path to the downstream multitask checkpoint.")
-    parser.add_argument("--split", default="test", choices=["train", "validation", "test"], help="Dataset split to score.")
+    parser.add_argument(
+        "--split",
+        default="test",
+        help="Dataset split to score, for example train, validation, test, or test_ood.",
+    )
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference.") #see if i make it 512
-    parser.add_argument("--seq-len", type=int, default=32, help="Sequence length used for the dataset.")
+    parser.add_argument("--seq-len", type=int, default=None, help="Sequence length used for the dataset. Defaults to the checkpoint setting.")
+    parser.add_argument("--stride", type=int, default=None, help="Stride used for the dataset. Defaults to the checkpoint setting.")
     parser.add_argument("--clip-value", type=float, default=5.0, help="Continuous feature clamp value.")
     parser.add_argument("--future-horizon-minutes", type=int, default=None, help="Override the future warning horizon stored in the checkpoint.")
     parser.add_argument("--max-sequences", type=int, default=32, help="Maximum number of sequences to print.")
@@ -72,14 +79,25 @@ def load_checkpoint(checkpoint_path, device):
     known_attack_labels = checkpoint.get("known_attack_labels", [])
     future_horizon_minutes = checkpoint.get("future_horizon_minutes", 5)
     future_task_enabled = bool(checkpoint.get("future_task_enabled", True))
-    return checkpoint, thresholds, known_attack_labels, future_horizon_minutes, future_task_enabled
+    checkpoint_seq_len = int(checkpoint.get("seq_len", DEFAULT_SEQ_LEN))
+    checkpoint_stride = int(checkpoint.get("stride", DEFAULT_STRIDE))
+    return (
+        checkpoint,
+        thresholds,
+        known_attack_labels,
+        future_horizon_minutes,
+        future_task_enabled,
+        checkpoint_seq_len,
+        checkpoint_stride,
+    )
 
 
-def build_dataset(split_path, seq_len, clip_value, future_horizon_minutes, known_attack_labels, max_sequences):
+def build_dataset(split_path, seq_len, stride, clip_value, future_horizon_minutes, known_attack_labels, max_sequences):
     base_dataset = SpatioTemporalNIDSDataset(
         arrow_dir_path=split_path,
         stats_path=DEFAULT_STATS,
         seq_len=seq_len,
+        stride=stride,
         clip_value=clip_value,
     )
     known_attack_to_idx = {attack_name: idx for idx, attack_name in enumerate(known_attack_labels)}
@@ -180,13 +198,24 @@ def run_inference():
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint, thresholds, known_attack_labels, checkpoint_horizon, future_task_enabled = load_checkpoint(args.checkpoint, device)
+    (
+        checkpoint,
+        thresholds,
+        known_attack_labels,
+        checkpoint_horizon,
+        future_task_enabled,
+        checkpoint_seq_len,
+        checkpoint_stride,
+    ) = load_checkpoint(args.checkpoint, device)
     future_horizon_minutes = args.future_horizon_minutes or checkpoint_horizon
+    seq_len = args.seq_len if args.seq_len is not None else checkpoint_seq_len
+    stride = args.stride if args.stride is not None else checkpoint_stride
     split_path, resolved_split = resolve_split_path(args.split)
 
     dataset = build_dataset(
         split_path=split_path,
-        seq_len=args.seq_len,
+        seq_len=seq_len,
+        stride=stride,
         clip_value=args.clip_value,
         future_horizon_minutes=future_horizon_minutes,
         known_attack_labels=known_attack_labels,
@@ -200,10 +229,11 @@ def run_inference():
         pin_memory=device.type == "cuda",
     )
 
-    model = load_model(checkpoint, dataset, device, args.seq_len, future_task_enabled)
+    model = load_model(checkpoint, dataset, device, seq_len, future_task_enabled)
 
     print(f"Loaded checkpoint: {args.checkpoint}")
     print(f"Running inference on split: {resolved_split}")
+    print(f"Window config: seq_len={seq_len}, stride={stride}")
     print(f"Sequences to inspect: {len(dataset)}")
     print(f"Known attack labels: {known_attack_labels}")
     print(f"Future task enabled: {future_task_enabled}")
