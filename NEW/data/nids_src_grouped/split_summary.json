@@ -1,0 +1,85 @@
+{
+  "config": {
+    "host_session_gap_minutes": 30,
+    "train_ratio": 0.7,
+    "validation_ratio": 0.15,
+    "test_ratio": 0.15,
+    "id_eval_target_attack_rate": 0.08,
+    "ood_holdout_families": [
+      "Botnets"
+    ],
+    "min_family_groups_for_split_coverage": 3,
+    "min_family_groups_for_id_eval": 8
+  },
+  "rare_train_only_families": [
+    "Brute Force"
+  ],
+  "splits": {
+    "train": {
+      "rows_total": 15771504,
+      "attack_rows": 2017079,
+      "benign_rows": 13754425,
+      "attack_pct_of_total": 12.7894,
+      "groups_total": 273212,
+      "groups_with_attack": 971,
+      "attack_families": {
+        "DoS / DDoS": 1203068,
+        "Brute Force": 575194,
+        "Infiltration": 147161,
+        "Web Attacks": 2077,
+        "Fuzzers": 25238,
+        "Analysis / Backdoors": 4204,
+        "Exploits / Shellcode": 33366,
+        "Reconnaissance": 12604,
+        "Worms / Generic": 14167
+      }
+    },
+    "validation": {
+      "rows_total": 3650919,
+      "attack_rows": 286593,
+      "benign_rows": 3364326,
+      "attack_pct_of_total": 7.8499,
+      "groups_total": 67661,
+      "groups_with_attack": 210,
+      "attack_families": {
+        "DoS / DDoS": 268485,
+        "Infiltration": 13659,
+        "Web Attacks": 256,
+        "Fuzzers": 1595,
+        "Analysis / Backdoors": 277,
+        "Exploits / Shellcode": 1687,
+        "Reconnaissance": 462,
+        "Worms / Generic": 172
+      }
+    },
+    "test": {
+      "rows_total": 2847338,
+      "attack_rows": 217221,
+      "benign_rows": 2630117,
+      "attack_pct_of_total": 7.6289,
+      "groups_total": 53953,
+      "groups_with_attack": 209,
+      "attack_families": {
+        "DoS / DDoS": 161743,
+        "Infiltration": 27332,
+        "Web Attacks": 205,
+        "Fuzzers": 6983,
+        "Analysis / Backdoors": 1404,
+        "Exploits / Shellcode": 10076,
+        "Reconnaissance": 4008,
+        "Worms / Generic": 5470
+      }
+    },
+    "test_ood": {
+      "rows_total": 211192,
+      "attack_rows": 207703,
+      "benign_rows": 3489,
+      "attack_pct_of_total": 98.3479,
+      "groups_total": 9,
+      "groups_with_attack": 9,
+      "attack_families": {
+        "Botnets": 207703
+      }
+    }
+  }
+}
