@@ -1,0 +1,87 @@
+{
+  "best_checkpoint_file": "nids_multitask_best.pt",
+  "last_checkpoint_file": "nids_multitask_epoch_20.pt",
+  "best": {
+    "epoch_number": 10,
+    "validation_score": 0.9774688137677707,
+    "best_threshold": 0.9520799517631531,
+    "best_current": {
+      "auc": 0.9927869354189853,
+      "pr_auc": 0.9774688137677707,
+      "precision": 1.0,
+      "recall": 0.8500433087916847,
+      "f1": 0.9189442266050214,
+      "false_positive_rate": 0.0,
+      "positive_rate": 0.08743272858082747,
+      "threshold": 0.9520799517631531,
+      "meets_target_recall": true,
+      "selection_policy": "precision_at_target_recall",
+      "target_recall": 0.85
+    },
+    "future": {
+      "auc": 0.8773172410517333,
+      "pr_auc": 0.024733877245364622,
+      "precision": 0.04002163331530557,
+      "recall": 0.16554809843400448,
+      "f1": 0.06445993031358885,
+      "false_positive_rate": 0.009227873897853935,
+      "positive_rate": 0.002318476755584832
+    },
+    "known_family_accuracy": 0.08672585534863578,
+    "unknown_warning_recall": null,
+    "mean_future_lead_minutes": 1.5222126245498657,
+    "loss": {
+      "total": 2.454200279575366,
+      "current": 0.0027480029514205828,
+      "family": 2.00836357586176,
+      "future": 1.9260299646313805,
+      "unknown": 0.0
+    }
+  },
+  "last": {
+    "epoch_number": 20,
+    "validation_score": 0.976009072459403,
+    "best_threshold": 0.9648852348327637,
+    "best_current": {
+      "auc": 0.9920973183764688,
+      "pr_auc": 0.976009072459403,
+      "precision": 1.0,
+      "recall": 0.8500433087916847,
+      "f1": 0.9189442266050214,
+      "false_positive_rate": 0.0,
+      "positive_rate": 0.08743272858082747,
+      "threshold": 0.9648852348327637,
+      "meets_target_recall": true,
+      "selection_policy": "precision_at_target_recall",
+      "target_recall": 0.85
+    },
+    "future": {
+      "auc": 0.8147321470108678,
+      "pr_auc": 0.02041089880092981,
+      "precision": 0.045879354290569246,
+      "recall": 0.12080536912751678,
+      "f1": 0.0665024630541872,
+      "false_positive_rate": 0.0058382548660788555,
+      "positive_rate": 0.002318476755584832
+    },
+    "known_family_accuracy": 0.08699653529666522,
+    "unknown_warning_recall": null,
+    "mean_future_lead_minutes": 1.7612504959106445,
+    "loss": {
+      "total": 3.35351355708115,
+      "current": 0.002557537222204161,
+      "family": 1.9943148987706,
+      "future": 3.1349881255906453,
+      "unknown": 0.0
+    }
+  },
+  "delta_last_minus_best": {
+    "validation_score": -0.0014597413083676791,
+    "best_current_pr_auc": -0.0014597413083676791,
+    "best_current_f1": 0.0,
+    "best_current_recall": 0.0,
+    "future_pr_auc": -0.0043229784444348135,
+    "future_auc": -0.06258509404086543,
+    "known_family_accuracy": 0.0002706799480294425
+  }
+}

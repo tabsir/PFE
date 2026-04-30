@@ -1,0 +1,27 @@
+{
+  "raw_attack_names": [
+    "Benign",
+    "Infilteration",
+    "Brute_Force_-Web",
+    "DoS_attacks-Slowloris",
+    "DDoS_attacks-LOIC-HTTP",
+    "DDOS_attack-HOIC",
+    "SQL_Injection",
+    "DDOS_attack-LOIC-UDP",
+    "Brute_Force_-XSS",
+    "Backdoor",
+    "Exploits",
+    "Fuzzers",
+    "Generic",
+    "Reconnaissance",
+    "DoS",
+    "Shellcode",
+    "Worms",
+    "Analysis",
+    "DoS_attacks-Hulk",
+    "DoS_attacks-GoldenEye",
+    "SSH-Bruteforce",
+    "FTP-BruteForce"
+  ],
+  "current_label_rule": "last_half_attack"
+}

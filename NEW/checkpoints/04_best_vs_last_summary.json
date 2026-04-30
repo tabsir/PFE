@@ -1,0 +1,61 @@
+{
+  "selection_policy": [
+    "lower val_combined_masked_mse is better",
+    "tie-break on higher pr_auc",
+    "then higher anomaly_auc",
+    "then lower val_masked_mse"
+  ],
+  "best_checkpoint_file": "stt_best.pt",
+  "last_checkpoint_file": "stt_epoch_50.pt",
+  "best": {
+    "epoch_number": 48,
+    "val_combined_masked_mse": 0.7331160213291963,
+    "val_masked_mse": 0.39334120248508786,
+    "val_mfm_masked_mse": 0.3397748188441084,
+    "val_full_mse": 0.1224312054234138,
+    "val_mfm_full_mse": 0.04055105258226417,
+    "anomaly_auc": 0.10625439986045261,
+    "pr_auc": 0.04766919629949863,
+    "best_f1": 0.1622216423103688,
+    "best_precision": 0.0882705151203904,
+    "best_recall": 1.0,
+    "best_threshold": 0.00013885527732782066,
+    "mfm_anomaly_auc": 0.1221168759775698,
+    "mfm_pr_auc": 0.047938140838187204,
+    "mfm_best_f1": 0.1622216423103688,
+    "mfm_best_precision": 0.0882705151203904,
+    "mfm_best_recall": 1.0,
+    "mfm_best_threshold": 0.00010387667134637013
+  },
+  "last": {
+    "epoch_number": 50,
+    "val_combined_masked_mse": 0.7333794776677237,
+    "val_masked_mse": 0.3932705299271869,
+    "val_mfm_masked_mse": 0.3401089477405368,
+    "val_full_mse": 0.12240749871213531,
+    "val_mfm_full_mse": 0.040602100527953565,
+    "anomaly_auc": 0.10612130260025573,
+    "pr_auc": 0.04766320457978444,
+    "best_f1": 0.1622216423103688,
+    "best_precision": 0.0882705151203904,
+    "best_recall": 1.0,
+    "best_threshold": 0.00013899202167522162,
+    "mfm_anomaly_auc": 0.12236785130550573,
+    "mfm_pr_auc": 0.047944099418850486,
+    "mfm_best_f1": 0.1622216423103688,
+    "mfm_best_precision": 0.0882705151203904,
+    "mfm_best_recall": 1.0,
+    "mfm_best_threshold": 0.00010611502511892468
+  },
+  "delta_last_minus_best": {
+    "val_combined_masked_mse": 0.00026345633852742356,
+    "val_masked_mse": -7.067255790094151e-05,
+    "val_mfm_masked_mse": 0.0003341288964284206,
+    "anomaly_auc": -0.00013309726019687662,
+    "pr_auc": -5.991719714187882e-06,
+    "best_f1": 0.0,
+    "mfm_anomaly_auc": 0.0002509753279359289,
+    "mfm_pr_auc": 5.9585806632816984e-06,
+    "mfm_best_f1": 0.0
+  }
+}
