@@ -1,0 +1,48 @@
+>>>PYTHON-EXEC-OUTPUT
+Loading cached downstream targets: /home/aka/PFE-code/NEW/data/nids_src_grouped/test/downstream_targets_seq32_stride16_h5m_last_half_attack.npz
+/home/aka/PFE-code/NEW/src/03_stt_architecture.py:74: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(
+NEW/src/06_infer_nids.py:78: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  return dt.datetime.utcfromtimestamp(timestamp_ms / 1000.0).strftime("%Y-%m-%d %H:%M:%S UTC")
+Loaded checkpoint: NEW/checkpoints/nids_multitask_05_with_future/nids_multitask_best.pt
+Running inference on split: test
+Window config: seq_len=32, stride=16
+Sequences available in replay dataset: 164611
+Sequences to print: 3
+Known attack labels: ['DoS / DDoS', 'Brute Force', 'Infiltration', 'Web Attacks', 'Fuzzers', 'Analysis / Backdoors', 'Exploits / Shellcode', 'Reconnaissance', 'Worms / Generic']
+Future task enabled: True
+Only attacks: True
+Sequence 1
+Window: 2018-02-22 13:49:56 UTC -> 2018-02-22 13:51:19 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.2468
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0018)
+Ground truth current label: attack
+Ground truth attack type: Brute_Force_-Web
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 2
+Window: 2018-02-22 15:34:57 UTC -> 2018-02-22 15:36:31 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.2582
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0019)
+Ground truth current label: attack
+Ground truth attack type: Brute_Force_-Web
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 3
+Window: 2018-02-22 19:03:37 UTC -> 2018-02-22 19:05:12 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.2725
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0013)
+Ground truth current label: attack
+Ground truth attack type: Brute_Force_-Web
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Inference summary
+benign: 3
+future warnings: 0
+<<<PYTHON-EXEC-OUTPUT

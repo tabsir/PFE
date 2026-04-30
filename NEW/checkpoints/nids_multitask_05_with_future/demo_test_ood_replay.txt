@@ -1,0 +1,78 @@
+>>>PYTHON-EXEC-OUTPUT
+Building downstream targets cache. This can take a while on the first run...
+Building downstream targets:   0%|          | 0/6 [00:00<?, ?it/s]Building downstream targets: 100%|██████████| 6/6 [00:00<00:00, 49539.02it/s]
+Saved downstream targets cache: /home/aka/PFE-code/NEW/data/nids_src_grouped/test_ood/downstream_targets_seq32_stride16_h5m_last_half_attack_first6.npz
+/home/aka/PFE-code/NEW/src/03_stt_architecture.py:74: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.encoder = nn.TransformerEncoder(
+NEW/src/06_infer_nids.py:67: DeprecationWarning: datetime.datetime.utcfromtimestamp() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.fromtimestamp(timestamp, datetime.UTC).
+  return dt.datetime.utcfromtimestamp(timestamp_ms / 1000.0).strftime("%Y-%m-%d %H:%M:%S UTC")
+Loaded checkpoint: NEW/checkpoints/nids_multitask_05_with_future/nids_multitask_best.pt
+Running inference on split: test_ood
+Window config: seq_len=32, stride=16
+Sequences to inspect: 6
+Known attack labels: ['DoS / DDoS', 'Brute Force', 'Infiltration', 'Web Attacks', 'Fuzzers', 'Analysis / Backdoors', 'Exploits / Shellcode', 'Reconnaissance', 'Worms / Generic']
+Future task enabled: True
+Sequence 1
+Window: 2018-03-02 12:47:24 UTC -> 2018-03-02 12:47:28 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.4680
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0003)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 2
+Window: 2018-03-02 12:47:26 UTC -> 2018-03-02 12:54:02 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.4896
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0013)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 3
+Window: 2018-03-02 12:47:28 UTC -> 2018-03-02 12:54:05 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.5390
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0043)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 4
+Window: 2018-03-02 12:54:02 UTC -> 2018-03-02 12:54:05 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.4897
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0015)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 5
+Window: 2018-03-02 12:54:05 UTC -> 2018-03-02 12:54:07 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.4561
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0016)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Sequence 6
+Window: 2018-03-02 12:54:05 UTC -> 2018-03-02 13:03:12 UTC
+Current status: benign
+Predicted attack type: Benign
+Current attack probability: 0.4506
+Early warning: no imminent attack predicted within the next 5 minutes (probability=0.0019)
+Ground truth current label: benign
+Ground truth attack type: Benign
+Ground truth future attack in horizon: no
+------------------------------------------------------------------------
+Inference summary
+benign: 6
+future warnings: 0
+<<<PYTHON-EXEC-OUTPUT

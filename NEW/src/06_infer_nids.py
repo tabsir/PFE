@@ -48,6 +48,23 @@ def parse_args():
     parser.add_argument("--clip-value", type=float, default=5.0, help="Continuous feature clamp value.")
     parser.add_argument("--future-horizon-minutes", type=int, default=None, help="Override the future warning horizon stored in the checkpoint.")
     parser.add_argument("--max-sequences", type=int, default=32, help="Maximum number of sequences to print.")
+    parser.add_argument(
+        "--dataset-max-sequences",
+        type=int,
+        default=None,
+        help="Optional cap on how many sequences to load before filtering. Leave unset for full-split replay.",
+    )
+    parser.add_argument(
+        "--only-attacks",
+        action="store_true",
+        help="Print only windows whose ground-truth current label is attack. Useful for demos.",
+    )
+    parser.add_argument(
+        "--status-filter",
+        choices=["benign", "known_attack", "unknown_attack_warning"],
+        default=None,
+        help="Optional predicted-status filter applied before printing sequences.",
+    )
     parser.add_argument("--num-workers", type=int, default=0, help="DataLoader worker count for inference.")
     return parser.parse_args()
 
@@ -219,7 +236,7 @@ def run_inference():
         clip_value=args.clip_value,
         future_horizon_minutes=future_horizon_minutes,
         known_attack_labels=known_attack_labels,
-        max_sequences=args.max_sequences,
+        max_sequences=args.dataset_max_sequences,
     )
     data_loader = DataLoader(
         dataset,
@@ -234,12 +251,15 @@ def run_inference():
     print(f"Loaded checkpoint: {args.checkpoint}")
     print(f"Running inference on split: {resolved_split}")
     print(f"Window config: seq_len={seq_len}, stride={stride}")
-    print(f"Sequences to inspect: {len(dataset)}")
+    print(f"Sequences available in replay dataset: {len(dataset)}")
+    print(f"Sequences to print: {args.max_sequences}")
     print(f"Known attack labels: {known_attack_labels}")
     print(f"Future task enabled: {future_task_enabled}")
+    print(f"Only attacks: {args.only_attacks}")
+    print(f"Status filter: {args.status_filter}")
 
     all_predictions = []
-    item_index = 0
+    printed_index = 0
 
     with torch.no_grad():
         for batch in data_loader:
@@ -256,6 +276,13 @@ def run_inference():
 
             batch_size = len(decoded_predictions)
             for batch_idx in range(batch_size):
+                prediction = decoded_predictions[batch_idx]
+                if args.status_filter is not None and prediction["status"] != args.status_filter:
+                    continue
+
+                if args.only_attacks and int(batch["label"][batch_idx].item()) == 0:
+                    continue
+
                 item = {
                     "start_time": batch["start_time"][batch_idx].item(),
                     "end_time": batch["end_time"][batch_idx].item(),
@@ -264,11 +291,14 @@ def run_inference():
                     "future_attack": batch["future_attack"][batch_idx].item(),
                     "future_lead_minutes": batch["future_lead_minutes"][batch_idx].item(),
                 }
-                prediction = decoded_predictions[batch_idx]
                 all_predictions.append(prediction)
-                print(describe_prediction(item_index, item, prediction, future_horizon_minutes))
+                print(describe_prediction(printed_index, item, prediction, future_horizon_minutes))
                 print("-" * 72)
-                item_index += 1
+                printed_index += 1
+                if printed_index >= args.max_sequences:
+                    break
+            if printed_index >= args.max_sequences:
+                break
 
     print(summarize_predictions(all_predictions))
 

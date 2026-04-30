@@ -1,0 +1,54 @@
+{
+  "split": "test",
+  "checkpoint": "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05_with_future/nids_multitask_best.pt",
+  "device": "cuda",
+  "future_task_enabled": 1,
+  "seq_len": 32,
+  "stride": 16,
+  "current_label_rule": "last_half_attack",
+  "thresholds_from_validation": {
+    "current": 0.9520799517631531,
+    "known": 0.55,
+    "future": 0.5
+  },
+  "threshold_target_recall": 0.85,
+  "sequence_count": 164611,
+  "current_positive_count": 14747,
+  "current_positive_rate": 0.08958696563413138,
+  "unknown_positive_count": 0,
+  "known_family_count": 14747,
+  "current_at_validation_threshold": {
+    "auc": 0.9865125676243878,
+    "pr_auc": 0.9550180636270029,
+    "precision": 1.0,
+    "recall": 0.7275378042991795,
+    "f1": 0.842282932956508,
+    "false_positive_rate": 0.0,
+    "positive_rate": 0.08958696563413138
+  },
+  "current_oracle_for_this_split_diagnostic_only": {
+    "auc": 0.9865125676243878,
+    "pr_auc": 0.9550180636270029,
+    "precision": 0.9771611193389976,
+    "recall": 0.8500712009222214,
+    "f1": 0.9091964026689875,
+    "false_positive_rate": 0.0019551059627395504,
+    "positive_rate": 0.08958696563413138,
+    "threshold": 0.6664798259735107,
+    "meets_target_recall": 1,
+    "selection_policy": "precision_at_target_recall",
+    "target_recall": 0.85
+  },
+  "future_at_validation_threshold": {
+    "auc": 0.9667948778525701,
+    "pr_auc": 0.5059133196471562,
+    "precision": 0.3488773747841105,
+    "recall": 0.7062937062937062,
+    "f1": 0.46705202312138727,
+    "false_positive_rate": 0.015268515268515269,
+    "positive_rate": 0.011450381679389313
+  },
+  "known_family_accuracy": 0.2685291923781108,
+  "unknown_warning_recall": null,
+  "mean_future_lead_minutes": 0.6314406394958496
+}

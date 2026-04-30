@@ -1,0 +1,7 @@
+{
+  "raw_attack_names": [
+    "Benign",
+    "Bot"
+  ],
+  "current_label_rule": "last_half_attack"
+}

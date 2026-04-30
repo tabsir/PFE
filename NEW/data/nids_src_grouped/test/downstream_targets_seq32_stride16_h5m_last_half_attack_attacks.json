@@ -1,0 +1,20 @@
+{
+  "raw_attack_names": [
+    "Benign",
+    "Brute_Force_-Web",
+    "Infilteration",
+    "DDoS_attacks-LOIC-HTTP",
+    "DDOS_attack-HOIC",
+    "DDOS_attack-LOIC-UDP",
+    "Backdoor",
+    "Fuzzers",
+    "Exploits",
+    "DoS",
+    "Reconnaissance",
+    "Generic",
+    "Shellcode",
+    "Worms",
+    "Analysis"
+  ],
+  "current_label_rule": "last_half_attack"
+}
