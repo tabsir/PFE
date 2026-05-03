@@ -1,0 +1,94 @@
+{
+  "split": "test_ood",
+  "checkpoint": "NEW/experiments/v2/checkpoints/nids_multitask_05_v2_run1/nids_multitask_best.pt",
+  "device": "cuda",
+  "future_task_enabled": true,
+  "seq_len": 32,
+  "stride": 16,
+  "pseudo_zero_day_families": [
+    "DoS / DDoS"
+  ],
+  "thresholds_from_validation": {
+    "current": 0.9786726236343384,
+    "known": 0.3293428122997284,
+    "future": 2.2770815121475607e-05
+  },
+  "thresholds_applied": {
+    "current": 0.9786726236343384,
+    "known": 0.3293428122997284,
+    "future": 2.2770815121475607e-05
+  },
+  "threshold_overrides": {
+    "current": null,
+    "known": null,
+    "future": null
+  },
+  "threshold_target_recall": 0.85,
+  "future_threshold_target_recall": 0.7,
+  "known_target_unknown_recall": 0.8,
+  "sequence_count": 13187,
+  "current_positive_count": 12994,
+  "current_positive_rate": 0.9853643740047016,
+  "unknown_positive_count": 12994,
+  "known_family_count": 0,
+  "future_positive_count": 18,
+  "attack_family_counts": {
+    "Botnets": 12994
+  },
+  "current_at_validation_threshold": {
+    "auc": 0.0003337530833282161,
+    "pr_auc": 0.9373800091224569,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "false_positive_rate": 0.0,
+    "positive_rate": 0.9853643740047016
+  },
+  "current_oracle_for_this_split_diagnostic_only": {
+    "threshold": 0.06212202087044716,
+    "f1": 0.9926282418547802,
+    "precision": 0.9853643740047016,
+    "recall": 1.0,
+    "meets_target_recall": true,
+    "selection_policy": "precision_at_target_recall",
+    "target_recall": 0.85
+  },
+  "future_at_validation_threshold": {
+    "auc": 0.4257142857142857,
+    "pr_auc": 0.07883903018849223,
+    "precision": 0.09142857142857143,
+    "recall": 0.8888888888888888,
+    "f1": 0.16580310880829016,
+    "false_positive_rate": 0.9085714285714286,
+    "positive_rate": 0.09326424870466321
+  },
+  "future_oracle_for_this_split_diagnostic_only": {
+    "threshold": 7.352330430876464e-05,
+    "f1": 0.1807228915662651,
+    "precision": 0.10135135135135136,
+    "recall": 0.8333333333333334,
+    "meets_target_recall": true,
+    "selection_policy": "precision_at_target_recall",
+    "target_recall": 0.7
+  },
+  "known_family_accuracy": null,
+  "known_gate_at_validation_threshold": {
+    "threshold": 0.3293428122997284,
+    "accepted_accuracy": null,
+    "known_coverage": null,
+    "balanced_score": null,
+    "unknown_recall": 0.0
+  },
+  "known_gate_oracle_for_this_split_diagnostic_only": {
+    "threshold": 0.0,
+    "accepted_accuracy": 0.0,
+    "known_coverage": 0.0,
+    "balanced_score": 0.0,
+    "unknown_recall": 0.0,
+    "meets_target_unknown_recall": false,
+    "selection_policy": "balanced_known_accuracy_at_target_unknown_recall",
+    "target_unknown_recall": 0.8
+  },
+  "unknown_warning_recall": 0.0,
+  "mean_future_lead_minutes": 1.964706301689148
+}

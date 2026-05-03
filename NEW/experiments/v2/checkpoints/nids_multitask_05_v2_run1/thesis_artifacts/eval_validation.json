@@ -1,0 +1,91 @@
+{
+  "split": "validation",
+  "checkpoint": "NEW/experiments/v2/checkpoints/nids_multitask_05_v2_run1/nids_multitask_best.pt",
+  "device": "cuda",
+  "future_task_enabled": true,
+  "seq_len": 32,
+  "stride": 16,
+  "pseudo_zero_day_families": [
+    "DoS / DDoS"
+  ],
+  "thresholds_from_validation": {
+    "current": 0.9786726236343384,
+    "known": 0.3293428122997284,
+    "future": 2.2770815121475607e-05
+  },
+  "threshold_target_recall": 0.85,
+  "future_threshold_target_recall": 0.7,
+  "known_target_unknown_recall": 0.8,
+  "sequence_count": 211271,
+  "current_positive_count": 18472,
+  "current_positive_rate": 0.08743272858082747,
+  "unknown_positive_count": 16771,
+  "known_family_count": 1701,
+  "future_positive_count": 447,
+  "attack_family_counts": {
+    "Infiltration": 1343,
+    "Web Attacks": 99,
+    "DoS / DDoS": 16771,
+    "Exploits / Shellcode": 104,
+    "Reconnaissance": 27,
+    "Fuzzers": 102,
+    "Worms / Generic": 7,
+    "Analysis / Backdoors": 19
+  },
+  "current_at_validation_threshold": {
+    "auc": 0.9934369983065748,
+    "pr_auc": 0.9795463770620526,
+    "precision": 1.0,
+    "recall": 0.8500433087916847,
+    "f1": 0.9189442266050214,
+    "false_positive_rate": 0.0,
+    "positive_rate": 0.08743272858082747
+  },
+  "current_oracle_for_this_split_diagnostic_only": {
+    "threshold": 0.9786726236343384,
+    "f1": 0.9189442266050214,
+    "precision": 1.0,
+    "recall": 0.8500433087916847,
+    "meets_target_recall": true,
+    "selection_policy": "precision_at_target_recall",
+    "target_recall": 0.85
+  },
+  "future_at_validation_threshold": {
+    "auc": 0.8362762508108735,
+    "pr_auc": 0.021429632980462104,
+    "precision": 0.009567184252353589,
+    "recall": 0.7002237136465325,
+    "f1": 0.018876458703977327,
+    "false_positive_rate": 0.16845678755614707,
+    "positive_rate": 0.002318476755584832
+  },
+  "future_oracle_for_this_split_diagnostic_only": {
+    "threshold": 2.2770815121475607e-05,
+    "f1": 0.018876458703977327,
+    "precision": 0.009567184252353589,
+    "recall": 0.7002237136465325,
+    "meets_target_recall": true,
+    "selection_policy": "precision_at_target_recall",
+    "target_recall": 0.7
+  },
+  "known_family_accuracy": 0.9417989417989417,
+  "known_gate_at_validation_threshold": {
+    "threshold": 0.3293428122997284,
+    "accepted_accuracy": 0.7171717171717171,
+    "known_coverage": 0.1164021164021164,
+    "balanced_score": 0.20029492851189332,
+    "unknown_recall": 0.8000119253473258
+  },
+  "known_gate_oracle_for_this_split_diagnostic_only": {
+    "threshold": 0.3293428122997284,
+    "accepted_accuracy": 0.7171717171717171,
+    "known_coverage": 0.1164021164021164,
+    "balanced_score": 0.20029492851189332,
+    "unknown_recall": 0.8000119253473258,
+    "meets_target_unknown_recall": true,
+    "selection_policy": "balanced_known_accuracy_at_target_unknown_recall",
+    "target_unknown_recall": 0.8
+  },
+  "unknown_warning_recall": 0.8000119253473258,
+  "mean_future_lead_minutes": 1.654428482055664
+}

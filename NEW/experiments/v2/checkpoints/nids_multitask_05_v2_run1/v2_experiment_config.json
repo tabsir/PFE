@@ -1,0 +1,49 @@
+{
+  "seq_len": 32,
+  "stride": 16,
+  "current_label_rule": "last_half_attack",
+  "future_task_enabled": true,
+  "train_target_positive_rate": 0.2,
+  "threshold_target_recall": 0.85,
+  "future_threshold_target_recall": 0.7,
+  "known_target_unknown_recall": 0.8,
+  "unknown_family_loss_weight": 0.25,
+  "family_loss_weight": 1.0,
+  "future_loss_weight": 1.0,
+  "family_sampler_power": 0.5,
+  "pseudo_zero_day_families": [
+    "DoS / DDoS"
+  ],
+  "pseudo_zero_day_family_count": 1,
+  "known_attack_labels": [
+    "Brute Force",
+    "Infiltration",
+    "Web Attacks",
+    "Fuzzers",
+    "Analysis / Backdoors",
+    "Exploits / Shellcode",
+    "Reconnaissance",
+    "Worms / Generic"
+  ],
+  "train_attack_family_counts": {
+    "Infiltration": 14571,
+    "Web Attacks": 413,
+    "DoS / DDoS": 75149,
+    "Analysis / Backdoors": 264,
+    "Exploits / Shellcode": 2106,
+    "Fuzzers": 1571,
+    "Reconnaissance": 774,
+    "Worms / Generic": 874,
+    "Brute Force": 35947
+  },
+  "validation_attack_family_counts": {
+    "Infiltration": 1343,
+    "Web Attacks": 99,
+    "DoS / DDoS": 16771,
+    "Exploits / Shellcode": 104,
+    "Reconnaissance": 27,
+    "Fuzzers": 102,
+    "Worms / Generic": 7,
+    "Analysis / Backdoors": 19
+  }
+}

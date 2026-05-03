@@ -1,0 +1,10 @@
+{
+  "raw_attack_names": [
+    "Benign",
+    "Brute_Force_-Web"
+  ],
+  "current_label_rule": "last_half_attack",
+  "future_horizons_minutes": [
+    5
+  ]
+}

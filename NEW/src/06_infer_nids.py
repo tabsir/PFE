@@ -27,7 +27,7 @@ DownstreamNIDSDataset = downstream_module.DownstreamNIDSDataset
 
 
 CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
-DEFAULT_CHECKPOINT = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05/nids_multitask_best.pt"
+DEFAULT_CHECKPOINT = "/home/aka/PFE-code/NEW/checkpoints/nids_multitask_05_with_future/nids_multitask_best.pt"
 DEFAULT_STATS      = "/home/aka/PFE-code/NEW/nids_normalization_stats.json"
 DEFAULT_DATA_ROOT  = "/home/aka/PFE-code/NEW/data/nids_src_grouped"
 DEFAULT_SEQ_LEN    = 32
@@ -42,7 +42,7 @@ def parse_args():
         default="test",
         help="Dataset split to score, for example train, validation, test, or test_ood.",
     )
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size for inference.") #see if i make it 512
+    parser.add_argument("--batch-size", type=int, default=512, help="Batch size for inference.") #see if i make it 512
     parser.add_argument("--seq-len", type=int, default=None, help="Sequence length used for the dataset. Defaults to the checkpoint setting.")
     parser.add_argument("--stride", type=int, default=None, help="Stride used for the dataset. Defaults to the checkpoint setting.")
     parser.add_argument("--clip-value", type=float, default=5.0, help="Continuous feature clamp value.")

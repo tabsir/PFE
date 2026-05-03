@@ -66,56 +66,229 @@ def inject_styles():
     st.markdown(
         """
         <style>
-        .stApp {
-            background:
-                radial-gradient(circle at top left, rgba(11, 102, 106, 0.08), transparent 32%),
-                linear-gradient(180deg, #f7f8f3 0%, #eef2ea 100%);
+        :root {
+            --bg-main: #091318;
+            --bg-panel: rgba(14, 27, 34, 0.82);
+            --bg-panel-strong: rgba(18, 34, 43, 0.92);
+            --bg-panel-soft: rgba(22, 40, 49, 0.72);
+            --line-soft: rgba(150, 186, 177, 0.18);
+            --line-strong: rgba(181, 216, 208, 0.28);
+            --text-main: #edf6f2;
+            --text-soft: #b9cbc6;
+            --accent: #d88a5b;
+            --accent-soft: #f0bb8f;
+            --success: #7fd0b7;
+            --warning: #f1b878;
         }
-        .demo-card {
-            background: rgba(255, 255, 255, 0.88);
-            border: 1px solid rgba(20, 57, 69, 0.12);
-            border-radius: 18px;
-            padding: 1rem 1.15rem;
-            box-shadow: 0 10px 30px rgba(16, 34, 45, 0.08);
-            margin-bottom: 0.9rem;
+        html, body, [class*="css"]  {
+            font-family: "Segoe UI", "Inter", sans-serif;
+        }
+        .stApp,
+        [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(circle at 8% 12%, rgba(69, 134, 130, 0.18), transparent 28%),
+                radial-gradient(circle at 92% 18%, rgba(216, 138, 91, 0.14), transparent 24%),
+                linear-gradient(180deg, #071115 0%, #0d1820 42%, #111d23 100%);
+            color: var(--text-main);
+        }
+        header[data-testid="stHeader"] {
+            background: rgba(7, 17, 21, 0.18);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        [data-testid="stToolbar"],
+        .stAppDeployButton,
+        #MainMenu,
+        footer {
+            visibility: hidden;
+            height: 0;
+            position: fixed;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            background:
+                linear-gradient(180deg, rgba(10, 24, 31, 0.98) 0%, rgba(17, 36, 43, 0.98) 100%);
+            border-right: 1px solid var(--line-soft);
+        }
+        [data-testid="stSidebar"] * {
+            color: var(--text-main) !important;
+        }
+        .block-container {
+            max-width: 1180px;
+            padding-top: 2rem;
+            padding-bottom: 3rem;
+        }
+        .demo-hero {
+            position: relative;
+            overflow: hidden;
+            background:
+                radial-gradient(circle at top right, rgba(241, 184, 120, 0.18), transparent 28%),
+                linear-gradient(135deg, rgba(13, 35, 43, 0.96) 0%, rgba(18, 32, 38, 0.92) 52%, rgba(45, 31, 24, 0.9) 100%);
+            border: 1px solid var(--line-strong);
+            border-radius: 28px;
+            padding: 1.35rem 1.45rem 1.55rem 1.45rem;
+            box-shadow: 0 28px 70px rgba(2, 8, 12, 0.34);
+            margin-bottom: 1.15rem;
+        }
+        .demo-hero::after {
+            content: "";
+            position: absolute;
+            inset: auto -8% -35% auto;
+            width: 280px;
+            height: 280px;
+            background: radial-gradient(circle, rgba(127, 208, 183, 0.12) 0%, transparent 68%);
+            pointer-events: none;
         }
         .demo-kicker {
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: #56737a;
-            margin-bottom: 0.2rem;
+            color: var(--accent-soft);
+            margin-bottom: 0.35rem;
+            font-weight: 700;
         }
         .demo-title {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #10222d;
-            margin-bottom: 0.25rem;
+            font-size: 2.2rem;
+            line-height: 1.05;
+            font-weight: 800;
+            color: var(--text-main);
+            margin-bottom: 0.45rem;
+            max-width: 10ch;
+        }
+        .demo-subtitle {
+            color: var(--text-soft);
+            font-size: 1rem;
+            line-height: 1.65;
+            max-width: 74ch;
         }
         .status-pill {
             display: inline-block;
-            padding: 0.2rem 0.7rem;
+            padding: 0.28rem 0.78rem;
             border-radius: 999px;
             font-size: 0.78rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            border: 1px solid transparent;
         }
         .status-benign {
-            background: #dfece2;
-            color: #275537;
+            background: rgba(127, 208, 183, 0.12);
+            color: #9fe5c8;
+            border-color: rgba(127, 208, 183, 0.24);
         }
         .status-known_attack {
-            background: #d6ecff;
-            color: #0e4976;
+            background: rgba(100, 178, 255, 0.14);
+            color: #a8d4ff;
+            border-color: rgba(100, 178, 255, 0.24);
         }
         .status-unknown_attack_warning {
-            background: #fff1d8;
-            color: #8a4d00;
+            background: rgba(241, 184, 120, 0.16);
+            color: #ffd2a0;
+            border-color: rgba(241, 184, 120, 0.3);
         }
         .small-muted {
-            color: #61777b;
+            color: var(--text-soft);
             font-size: 0.92rem;
+        }
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.55rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--line-soft);
+            border-radius: 999px;
+            padding: 0.3rem;
+            margin-bottom: 1rem;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: auto;
+            background: transparent;
+            border-radius: 999px;
+            color: var(--text-soft);
+            padding: 0.55rem 1rem;
+            transition: all 120ms ease;
+        }
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, rgba(216, 138, 91, 0.95), rgba(241, 184, 120, 0.95));
+            color: #182227 !important;
+            font-weight: 700;
+        }
+        .stTabs [data-baseweb="tab-highlight"] {
+            display: none;
+        }
+        [data-testid="metric-container"] {
+            background: linear-gradient(180deg, rgba(18, 34, 43, 0.92) 0%, rgba(12, 24, 31, 0.94) 100%);
+            border: 1px solid var(--line-soft);
+            border-radius: 22px;
+            padding: 1rem 1rem 0.95rem 1rem;
+            box-shadow: 0 18px 38px rgba(3, 10, 14, 0.22);
+        }
+        [data-testid="metric-container"] label,
+        [data-testid="metric-container"] [data-testid="stMetricLabel"] {
+            color: var(--text-soft) !important;
+            font-weight: 600;
+        }
+        [data-testid="metric-container"] [data-testid="stMetricValue"] {
+            color: var(--text-main);
+        }
+        div[data-testid="stAlert"],
+        div[data-testid="stExpander"],
+        div[data-testid="stDataFrame"],
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: var(--bg-panel);
+            border: 1px solid var(--line-soft);
+            border-radius: 20px;
+            box-shadow: 0 12px 32px rgba(3, 10, 14, 0.16);
+        }
+        div[data-testid="stAlert"] {
+            color: var(--text-main);
+        }
+        div[data-testid="stAlert"] p,
+        div[data-testid="stAlert"] div,
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stCaptionContainer"],
+        .stRadio label,
+        .stCheckbox label,
+        .stSelectbox label,
+        .stNumberInput label,
+        .stTextInput label,
+        .stMarkdown,
+        p,
+        li,
+        span {
+            color: var(--text-main);
+        }
+        [data-testid="stCaptionContainer"],
+        .stCaption,
+        .small-muted {
+            color: var(--text-soft) !important;
+        }
+        .stMarkdown a {
+            color: #9ecfff;
+        }
+        .stButton > button,
+        .stDownloadButton > button,
+        button[kind="primary"] {
+            background: linear-gradient(135deg, rgba(216, 138, 91, 1), rgba(241, 184, 120, 1));
+            color: #162228;
+            border: none;
+            border-radius: 999px;
+            font-weight: 700;
+            box-shadow: 0 12px 24px rgba(216, 138, 91, 0.18);
+        }
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        button[kind="primary"]:hover {
+            filter: brightness(1.03);
+        }
+        .stTextInput input,
+        .stNumberInput input,
+        .stSelectbox [data-baseweb="select"],
+        .stMultiSelect [data-baseweb="select"] {
+            background: var(--bg-panel-soft);
+            border: 1px solid var(--line-soft);
+            color: var(--text-main);
+            border-radius: 14px;
+        }
+        .stRadio [role="radiogroup"],
+        .stCheckbox {
+            background: transparent;
         }
         </style>
         """,
@@ -124,10 +297,17 @@ def inject_styles():
 
 
 def render_header():
-    st.markdown('<div class="demo-kicker">Local Defense Dashboard</div>', unsafe_allow_html=True)
-    st.markdown('<div class="demo-title">Spatio-Temporal NIDS Thesis Demo</div>', unsafe_allow_html=True)
     st.markdown(
-        "This dashboard presents the official 05 test metrics and a replay of model decisions without using a raw terminal during the defense.",
+        """
+        <div class="demo-hero">
+            <div class="demo-kicker">Local Defense Dashboard</div>
+            <div class="demo-title">Spatio-Temporal NIDS Thesis Demo</div>
+            <div class="demo-subtitle">
+                This dashboard presents the official 05 test metrics and a replay of model decisions without using a raw terminal during the defense.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
