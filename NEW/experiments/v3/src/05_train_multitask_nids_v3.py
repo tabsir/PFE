@@ -79,6 +79,11 @@ DEFAULT_FAMILY_REFINEMENT_LR = 1e-3
 DEFAULT_FAMILY_REFINEMENT_SAMPLER_POWER = 0.20
 DEFAULT_FAMILY_REFINEMENT_MAX_FAMILY_BOOST = 4.0
 DEFAULT_FAMILY_REFINEMENT_LABEL_SMOOTHING = 0.02
+DEFAULT_FAMILY_REFINEMENT_PROJECTION_LR_SCALE = 0.25
+DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_PR_AUC_DROP = 0.002
+DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_F1_DROP = 0.005
+DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_PR_AUC_DROP = 0.002
+DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_F1_DROP = 0.005
 DEFAULT_FUTURE_HORIZONS_MINUTES = [1, 3, 5]
 DEFAULT_FUTURE_HORIZON_MINUTES = DEFAULT_FUTURE_HORIZONS_MINUTES[-1]
 DEFAULT_PSEUDO_ZERO_DAY_FAMILY_COUNT = 0
@@ -589,6 +594,138 @@ def summarize_future_metrics_by_horizon(metrics_by_horizon):
             f"f1={format_metric_value(metrics.get('f1', float('nan')), 4)})"
         )
     return "; ".join(parts)
+
+
+def compute_multiclass_macro_f1(targets, predictions):
+    targets = np.asarray(targets, dtype=np.int64)
+    predictions = np.asarray(predictions, dtype=np.int64)
+    if targets.size == 0 or predictions.size == 0 or targets.shape[0] != predictions.shape[0]:
+        return float("nan")
+
+    valid_mask = (targets >= 0) & (predictions >= 0)
+    if not valid_mask.any():
+        return float("nan")
+
+    targets = targets[valid_mask]
+    predictions = predictions[valid_mask]
+    labels = np.unique(np.concatenate([targets, predictions]))
+    if labels.size == 0:
+        return float("nan")
+
+    macro_f1_values = []
+    for label in labels.tolist():
+        true_positive = int(np.sum((predictions == label) & (targets == label)))
+        false_positive = int(np.sum((predictions == label) & (targets != label)))
+        false_negative = int(np.sum((predictions != label) & (targets == label)))
+        denominator = (2 * true_positive) + false_positive + false_negative
+        macro_f1_values.append(0.0 if denominator <= 0 else (2.0 * true_positive) / denominator)
+
+    return float(np.mean(np.asarray(macro_f1_values, dtype=np.float64)))
+
+
+def compute_multiclass_metrics_by_label(targets, predictions, label_names=None, accepted_mask=None):
+    targets = np.asarray(targets, dtype=np.int64)
+    predictions = np.asarray(predictions, dtype=np.int64)
+    if targets.size == 0 or predictions.size == 0 or targets.shape[0] != predictions.shape[0]:
+        return {}
+
+    valid_mask = targets >= 0
+    if not valid_mask.any():
+        return {}
+
+    targets = targets[valid_mask]
+    predictions = predictions[valid_mask]
+    gated_predictions = predictions.copy()
+    accepted_mask_array = None
+    if accepted_mask is not None:
+        accepted_mask_array = np.asarray(accepted_mask, dtype=bool)
+        if accepted_mask_array.shape[0] != valid_mask.shape[0]:
+            return {}
+        accepted_mask_array = accepted_mask_array[valid_mask]
+        gated_predictions[~accepted_mask_array] = -1
+
+    resolved_label_names = list(label_names or [])
+    required_label_count = 0
+    if targets.size:
+        required_label_count = max(required_label_count, int(targets.max()) + 1)
+    non_negative_predictions = predictions[predictions >= 0]
+    if non_negative_predictions.size:
+        required_label_count = max(required_label_count, int(non_negative_predictions.max()) + 1)
+    if len(resolved_label_names) < required_label_count:
+        resolved_label_names.extend(
+            [f"attack_{label_idx}" for label_idx in range(len(resolved_label_names), required_label_count)]
+        )
+
+    metrics_by_label = {}
+    for label_idx, label_name in enumerate(resolved_label_names):
+        support = int(np.sum(targets == label_idx))
+        predicted_count = int(np.sum(gated_predictions == label_idx))
+        true_positive = int(np.sum((gated_predictions == label_idx) & (targets == label_idx)))
+        false_positive = int(np.sum((gated_predictions == label_idx) & (targets != label_idx)))
+        false_negative = int(np.sum((gated_predictions != label_idx) & (targets == label_idx)))
+        precision = true_positive / predicted_count if predicted_count > 0 else 0.0
+        recall = true_positive / support if support > 0 else 0.0
+        f1 = 0.0
+        if precision > 0.0 or recall > 0.0:
+            f1 = (2.0 * precision * recall) / max(precision + recall, 1e-9)
+
+        record = {
+            "label_index": int(label_idx),
+            "support": support,
+            "predicted_count": predicted_count,
+            "true_positive": true_positive,
+            "false_positive": false_positive,
+            "false_negative": false_negative,
+            "precision": float(precision),
+            "recall": float(recall),
+            "f1": float(f1),
+        }
+        if accepted_mask_array is not None:
+            accepted_support = int(np.sum((targets == label_idx) & accepted_mask_array))
+            record["accepted_support"] = accepted_support
+            record["coverage"] = float(accepted_support / support) if support > 0 else 0.0
+
+        metrics_by_label[str(label_name)] = record
+
+    return metrics_by_label
+
+
+def add_ovr_curve_metrics_by_label(metrics_by_label, targets, probability_matrix, label_names=None):
+    targets = np.asarray(targets, dtype=np.int64)
+    probability_matrix = np.asarray(probability_matrix, dtype=np.float64)
+    if targets.size == 0 or probability_matrix.size == 0 or probability_matrix.shape[0] != targets.shape[0]:
+        return metrics_by_label
+
+    resolved_label_names = list(label_names or [])
+    if len(resolved_label_names) < probability_matrix.shape[1]:
+        resolved_label_names.extend(
+            [f"attack_{label_idx}" for label_idx in range(len(resolved_label_names), probability_matrix.shape[1])]
+        )
+
+    for label_idx in range(probability_matrix.shape[1]):
+        label_name = str(resolved_label_names[label_idx])
+        if label_name not in metrics_by_label:
+            metrics_by_label[label_name] = {
+                "label_index": int(label_idx),
+                "support": int(np.sum(targets == label_idx)),
+                "predicted_count": 0,
+                "true_positive": 0,
+                "false_positive": 0,
+                "false_negative": 0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+            }
+
+        binary_targets = (targets == label_idx).astype(np.int64)
+        class_probabilities = probability_matrix[:, label_idx]
+        curve_metrics = base_train.compute_binary_metrics(binary_targets, class_probabilities, threshold=0.5)
+        metrics_by_label[label_name]["auc"] = safe_metric(curve_metrics.get("auc"))
+        metrics_by_label[label_name]["roc_auc"] = safe_metric(curve_metrics.get("auc"))
+        metrics_by_label[label_name]["pr_auc"] = safe_metric(curve_metrics.get("pr_auc"))
+        metrics_by_label[label_name]["score_threshold"] = 0.5
+
+    return metrics_by_label
 
 
 def select_epoch_unknown_attack_families(rotation_pool, rotation_size, epoch_index):
@@ -1356,9 +1493,56 @@ def build_family_refinement_loader(
 def set_family_refinement_trainable(model):
     for parameter in model.parameters():
         parameter.requires_grad = False
-    if model.attack_family_head is not None:
-        for parameter in model.attack_family_head.parameters():
+    for module_name in ("pool_norm", "shared_projection", "attack_family_head"):
+        module = getattr(model, module_name, None)
+        if module is None:
+            continue
+        for parameter in module.parameters():
             parameter.requires_grad = True
+
+
+def family_refinement_candidate_is_acceptable(reference_validation_metrics, candidate_validation_metrics):
+    if reference_validation_metrics is None:
+        return True, []
+
+    reference_current = reference_validation_metrics["best_current"]
+    candidate_current = candidate_validation_metrics["best_current"]
+    reference_future = reference_validation_metrics.get("best_future") or {}
+    candidate_future = candidate_validation_metrics.get("best_future") or {}
+
+    reasons = []
+
+    current_pr_auc_drop = safe_metric(reference_current.get("pr_auc")) - safe_metric(candidate_current.get("pr_auc"))
+    if current_pr_auc_drop > DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_PR_AUC_DROP:
+        reasons.append(
+            "current_pr_auc_drop="
+            f"{current_pr_auc_drop:.4f} > {DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_PR_AUC_DROP:.4f}"
+        )
+
+    current_f1_drop = safe_metric(reference_current.get("f1")) - safe_metric(candidate_current.get("f1"))
+    if current_f1_drop > DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_F1_DROP:
+        reasons.append(
+            "current_f1_drop="
+            f"{current_f1_drop:.4f} > {DEFAULT_FAMILY_REFINEMENT_MAX_CURRENT_F1_DROP:.4f}"
+        )
+
+    reference_future_pr_auc = safe_metric(reference_future.get("pr_auc"))
+    candidate_future_pr_auc = safe_metric(candidate_future.get("pr_auc"))
+    future_pr_auc_drop = reference_future_pr_auc - candidate_future_pr_auc
+    if future_pr_auc_drop > DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_PR_AUC_DROP:
+        reasons.append(
+            "future_pr_auc_drop="
+            f"{future_pr_auc_drop:.4f} > {DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_PR_AUC_DROP:.4f}"
+        )
+
+    future_f1_drop = safe_metric(reference_future.get("f1")) - safe_metric(candidate_future.get("f1"))
+    if future_f1_drop > DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_F1_DROP:
+        reasons.append(
+            "future_f1_drop="
+            f"{future_f1_drop:.4f} > {DEFAULT_FAMILY_REFINEMENT_MAX_FUTURE_F1_DROP:.4f}"
+        )
+
+    return len(reasons) == 0, reasons
 
 
 def run_family_refinement_stage(
@@ -1380,6 +1564,7 @@ def run_family_refinement_stage(
     build_manifest_payload,
     validation_rank_builder,
     best_rank,
+    reference_validation_metrics=None,
     checkpoint_epoch_offset=-1,
 ):
     if model.attack_family_head is None or family_refinement_epochs <= 0:
@@ -1404,17 +1589,52 @@ def run_family_refinement_stage(
         print(f"Family refinement sampler factors: {family_sampler_factors}", flush=True)
 
     set_family_refinement_trainable(model)
-    family_parameters = [parameter for parameter in model.attack_family_head.parameters() if parameter.requires_grad]
-    optimizer = optim.AdamW(family_parameters, lr=family_refinement_lr, weight_decay=1e-4)
+    projection_parameters = []
+    for module_name in ("pool_norm", "shared_projection"):
+        module = getattr(model, module_name, None)
+        if module is None:
+            continue
+        projection_parameters.extend([parameter for parameter in module.parameters() if parameter.requires_grad])
+    family_head_parameters = [parameter for parameter in model.attack_family_head.parameters() if parameter.requires_grad]
+    trainable_family_parameters = projection_parameters + family_head_parameters
+    optimizer_param_groups = []
+    if projection_parameters:
+        optimizer_param_groups.append(
+            {
+                "params": projection_parameters,
+                "lr": family_refinement_lr * DEFAULT_FAMILY_REFINEMENT_PROJECTION_LR_SCALE,
+            }
+        )
+    if family_head_parameters:
+        optimizer_param_groups.append({"params": family_head_parameters, "lr": family_refinement_lr})
+    optimizer = optim.AdamW(optimizer_param_groups, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
-    family_loss_fn = nn.CrossEntropyLoss(label_smoothing=family_refinement_label_smoothing)
+    family_weight_tensor = build_family_weight_tensor(train_dataset, device)
+    family_loss_fn = nn.CrossEntropyLoss(
+        weight=family_weight_tensor,
+        label_smoothing=family_refinement_label_smoothing,
+    )
+
+    print(
+        "Family refinement trainable blocks: pool_norm, shared_projection, attack_family_head | "
+        f"projection_lr={family_refinement_lr * DEFAULT_FAMILY_REFINEMENT_PROJECTION_LR_SCALE:.5f} | "
+        f"head_lr={family_refinement_lr:.5f}",
+        flush=True,
+    )
 
     last_validation_metrics = None
     last_validation_rank = None
     last_validation_score = None
+    accepted_metrics = reference_validation_metrics
+    accepted_rank = best_rank
+    accepted_score = best_rank[1] if len(best_rank) > 1 else -float("inf")
 
     for refinement_epoch in range(family_refinement_epochs):
         model.eval()
+        if getattr(model, "pool_norm", None) is not None:
+            model.pool_norm.train()
+        if getattr(model, "shared_projection", None) is not None:
+            model.shared_projection.train()
         model.attack_family_head.train()
         running_family_loss = 0.0
         progress_bar = tqdm(
@@ -1442,7 +1662,7 @@ def run_family_refinement_stage(
 
             optimizer.zero_grad()
             family_loss.backward()
-            torch.nn.utils.clip_grad_norm_(family_parameters, max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(trainable_family_parameters, max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
@@ -1485,23 +1705,36 @@ def run_family_refinement_stage(
 
         dump_run_manifest(checkpoint_dir, build_manifest_payload(last_validation_metrics))
 
-        if last_validation_rank > best_rank:
+        accepted, rejection_reasons = family_refinement_candidate_is_acceptable(
+            reference_validation_metrics,
+            last_validation_metrics,
+        )
+        if accepted and last_validation_rank > accepted_rank:
+            accepted_metrics = last_validation_metrics
+            accepted_rank = last_validation_rank
+            accepted_score = last_validation_score
             best_rank = last_validation_rank
             best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
             base_train.atomic_torch_save(checkpoint_payload, best_checkpoint_path)
+            decision_text = "accepted"
+        else:
+            reason_text = "; ".join(rejection_reasons) if rejection_reasons else "not better than current accepted family refinement"
+            decision_text = f"rejected {reason_text}"
 
         print(
             f" Family refinement {refinement_epoch + 1} complete. "
             f"CurrentPRAUC={best_current['pr_auc']:.4f} CurrentF1={best_current['f1']:.4f} | "
             f"FutureMacroPRAUC={format_metric_value(best_future.get('pr_auc', float('nan')), 4)} "
             f"FutureMacroF1={format_metric_value(best_future.get('f1', float('nan')), 4)} | "
+            f"RawKnownMacroF1={format_metric_value(last_validation_metrics.get('known_family_macro_f1', float('nan')), 4)} "
+            f"AcceptedKnownMacroF1={format_metric_value(last_validation_metrics.get('known_family_accepted_macro_f1', float('nan')), 4)} | "
             f"KnownAcceptedAcc={best_known['accepted_accuracy']:.4f} KnownCoverage={best_known['known_coverage']:.4f} | "
             f"RawKnownAcc={last_validation_metrics['known_family_accuracy']:.4f} | "
-            f"FamilySelectionScore={last_validation_score:.4f}",
+            f"FamilySelectionScore={last_validation_score:.4f} | {decision_text}",
             flush=True,
         )
 
-    return best_rank, last_validation_metrics, last_validation_rank, last_validation_score
+    return best_rank, accepted_metrics, accepted_rank, accepted_score
 
 
 def build_family_weight_tensor(dataset, device):
@@ -1611,6 +1844,10 @@ def select_known_threshold(
         accepted_accuracy = float(
             (known_predictions[known_gate] == known_targets[known_gate]).mean()
         ) if known_gate.any() else 0.0
+        accepted_macro_f1 = compute_multiclass_macro_f1(
+            known_targets[known_gate],
+            known_predictions[known_gate],
+        )
         known_coverage = float(known_gate.mean()) if known_confidences.size else 0.0
         balanced_score = 2.0 * accepted_accuracy * known_coverage / max(
             accepted_accuracy + known_coverage,
@@ -1629,6 +1866,7 @@ def select_known_threshold(
         record = {
             "threshold": float(threshold_value),
             "accepted_accuracy": accepted_accuracy,
+            "accepted_macro_f1": safe_metric(accepted_macro_f1),
             "known_coverage": known_coverage,
             "balanced_score": float(balanced_score),
             "unknown_recall": unknown_recall,
@@ -1644,6 +1882,7 @@ def select_known_threshold(
         fallback_key = (
             record["unknown_recall"],
             record["balanced_score"],
+            record["accepted_macro_f1"],
             record["accepted_accuracy"],
             record["known_coverage"],
             -record["threshold"],
@@ -1654,6 +1893,7 @@ def select_known_threshold(
             current_fallback_key = (
                 fallback["unknown_recall"],
                 fallback["balanced_score"],
+                fallback.get("accepted_macro_f1", 0.0),
                 fallback["accepted_accuracy"],
                 fallback["known_coverage"],
                 -fallback["threshold"],
@@ -1666,6 +1906,7 @@ def select_known_threshold(
 
         selected_key = (
             record["balanced_score"],
+            record["accepted_macro_f1"],
             record["accepted_accuracy"],
             record["known_coverage"],
             -record["threshold"],
@@ -1675,6 +1916,7 @@ def select_known_threshold(
         else:
             current_selected_key = (
                 selected["balanced_score"],
+                selected.get("accepted_macro_f1", 0.0),
                 selected["accepted_accuracy"],
                 selected["known_coverage"],
                 -selected["threshold"],
@@ -1795,11 +2037,13 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
     mfm_reconstruction_scores = []
     family_predictions = []
     family_targets = []
+    family_probability_vectors = []
     known_confidences = []
     known_current_probs = []
     unknown_confidences = []
     unknown_current_probs = []
     family_head_enabled = False
+    known_attack_labels = list(getattr(data_loader.dataset, "known_attack_names", []))
     future_horizons_minutes = list(
         getattr(
             data_loader.dataset,
@@ -1983,6 +2227,7 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
                 if known_mask.any():
                     family_predictions.append(family_prediction[known_mask])
                     family_targets.append(known_target_np[known_mask])
+                    family_probability_vectors.append(family_probability[known_mask])
                     known_confidences.append(family_confidence[known_mask])
                     known_current_probs.append(current_probability[known_mask])
 
@@ -2173,9 +2418,29 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
 
     family_target_array = np.concatenate(family_targets) if family_targets else np.array([])
     family_prediction_array = np.concatenate(family_predictions) if family_predictions else np.array([])
+    family_probability_array = (
+        np.concatenate(family_probability_vectors, axis=0)
+        if family_probability_vectors
+        else np.zeros((0, len(known_attack_labels)), dtype=np.float64)
+    )
     raw_known_accuracy = float(
         (family_prediction_array == family_target_array).mean()
     ) if family_target_array.size else float("nan")
+    raw_known_macro_f1 = compute_multiclass_macro_f1(
+        family_target_array,
+        family_prediction_array,
+    )
+    raw_known_metrics_by_label = compute_multiclass_metrics_by_label(
+        family_target_array,
+        family_prediction_array,
+        known_attack_labels,
+    )
+    raw_known_metrics_by_label = add_ovr_curve_metrics_by_label(
+        raw_known_metrics_by_label,
+        family_target_array,
+        family_probability_array,
+        known_attack_labels,
+    )
 
     known_confidence_array = np.concatenate(known_confidences) if known_confidences else np.array([])
     known_current_prob_array = np.concatenate(known_current_probs) if known_current_probs else np.array([])
@@ -2202,6 +2467,7 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         best_known_metrics = {
             "threshold": float(thresholds["known"]),
             "accepted_accuracy": 0.0,
+            "accepted_macro_f1": 0.0,
             "known_coverage": 0.0,
             "balanced_score": 0.0,
             "unknown_recall": 0.0,
@@ -2213,6 +2479,33 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
                 DEFAULT_KNOWN_TARGET_UNKNOWN_RECALL,
             ),
         }
+
+    accepted_known_gate = (
+        (known_current_prob_array >= best_current_metrics["threshold"])
+        & (known_confidence_array >= best_known_metrics["threshold"])
+    ) if family_target_array.size and known_confidence_array.size else np.zeros(0, dtype=bool)
+    accepted_known_macro_f1 = compute_multiclass_macro_f1(
+        family_target_array[accepted_known_gate],
+        family_prediction_array[accepted_known_gate],
+    ) if accepted_known_gate.size else float("nan")
+    accepted_known_metrics_by_label = compute_multiclass_metrics_by_label(
+        family_target_array,
+        family_prediction_array,
+        known_attack_labels,
+        accepted_mask=accepted_known_gate,
+    )
+    accepted_family_target_array = family_target_array[accepted_known_gate] if accepted_known_gate.size else np.array([])
+    accepted_family_probability_array = (
+        family_probability_array[accepted_known_gate]
+        if accepted_known_gate.size and family_probability_array.size
+        else np.zeros((0, family_probability_array.shape[1] if family_probability_array.ndim == 2 else 0), dtype=np.float64)
+    )
+    accepted_known_metrics_by_label = add_ovr_curve_metrics_by_label(
+        accepted_known_metrics_by_label,
+        accepted_family_target_array,
+        accepted_family_probability_array,
+        known_attack_labels,
+    )
 
     return {
         "loss": metric_totals,
@@ -2257,7 +2550,13 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         "future_horizons_minutes": future_horizons_minutes,
         "future_horizon_labels": future_horizon_labels,
         "known_family_accuracy": raw_known_accuracy,
+        "known_family_macro_f1": raw_known_macro_f1,
+        "known_family_metrics_by_label": raw_known_metrics_by_label,
         "known_family_accepted_accuracy": best_known_metrics["accepted_accuracy"],
+        "known_family_accepted_macro_f1": safe_metric(
+            best_known_metrics.get("accepted_macro_f1", accepted_known_macro_f1)
+        ),
+        "known_family_accepted_metrics_by_label": accepted_known_metrics_by_label,
         "known_family_coverage": best_known_metrics["known_coverage"],
         "best_known": best_known_metrics,
         "unknown_warning_recall": ood_metrics["recall"],
@@ -2349,7 +2648,9 @@ def build_validation_rank(
 def build_family_refinement_rank(validation_metrics):
     best_known = validation_metrics["best_known"]
     balanced_score = safe_metric(best_known.get("balanced_score"))
+    accepted_macro_f1 = safe_metric(best_known.get("accepted_macro_f1"))
     accepted_accuracy = safe_metric(best_known.get("accepted_accuracy"))
+    raw_macro_f1 = safe_metric(validation_metrics.get("known_family_macro_f1"))
     raw_known_accuracy = safe_metric(validation_metrics.get("known_family_accuracy"))
     known_coverage = safe_metric(best_known.get("known_coverage"))
     family_unknown_recall = safe_metric(best_known.get("unknown_recall"))
@@ -2363,7 +2664,9 @@ def build_family_refinement_rank(validation_metrics):
     return (
         unknown_recall_pass,
         balanced_score,
+        accepted_macro_f1,
         accepted_accuracy,
+        raw_macro_f1,
         raw_known_accuracy,
         known_coverage,
         family_unknown_recall,
@@ -2617,11 +2920,24 @@ def build_run_manifest_payload(
             "current_pr_auc": safe_metric(validation_metrics["best_current"].get("pr_auc", 0.0)),
             "unknown_risk_pr_auc": safe_metric(validation_metrics["best_ood"].get("pr_auc", 0.0)),
             "future_pr_auc": safe_metric((validation_metrics.get("best_future") or {}).get("pr_auc", 0.0)),
+            "known_family_macro_f1": safe_metric(validation_metrics.get("known_family_macro_f1", 0.0)),
             "known_family_accepted_accuracy": safe_metric(
                 validation_metrics.get("known_family_accepted_accuracy", 0.0)
             ),
+            "known_family_accepted_macro_f1": safe_metric(
+                validation_metrics.get("known_family_accepted_macro_f1", 0.0)
+            ),
+            "known_family_balanced_score": safe_metric(
+                (validation_metrics.get("best_known") or {}).get("balanced_score", 0.0)
+            ),
             "unknown_label_positive_count": int(validation_metrics.get("unknown_label_positive_count", 0)),
         }
+        manifest_payload["known_family_metrics_by_label"] = dict(
+            validation_metrics.get("known_family_metrics_by_label", {})
+        )
+        manifest_payload["known_family_accepted_metrics_by_label"] = dict(
+            validation_metrics.get("known_family_accepted_metrics_by_label", {})
+        )
     return manifest_payload
 
 
@@ -4047,7 +4363,27 @@ def train_multitask_nids_v3():
         "family refinement",
     )
 
-    family_refinement_stage_rank = (-1.0, -float("inf"), -float("inf"), -float("inf"), -float("inf"), -float("inf"))
+    reference_family_validation_metrics = None
+    if multitask_best_state is not None:
+        reference_family_validation_metrics = multitask_best_state.get("validation_metrics")
+    if (
+        reference_family_validation_metrics is None
+        or "known_family_macro_f1" not in reference_family_validation_metrics
+        or "accepted_macro_f1" not in (reference_family_validation_metrics.get("best_known") or {})
+    ):
+        model.eval()
+        reference_family_validation_metrics = evaluate_downstream_v3(model, valid_loader, device, thresholds)
+
+    family_refinement_stage_rank = (
+        -1.0,
+        -float("inf"),
+        -float("inf"),
+        -float("inf"),
+        -float("inf"),
+        -float("inf"),
+        -float("inf"),
+        -float("inf"),
+    )
     if multitask_best_state is not None:
         seed_refinement_checkpoint_dir(
             multitask_best_path,
@@ -4073,13 +4409,11 @@ def train_multitask_nids_v3():
                 thresholds=thresholds,
                 loss_weights=loss_weights,
                 known_attack_labels=train_dataset.known_attack_names,
-                validation_metrics=multitask_best_state.get("validation_metrics"),
+                validation_metrics=reference_family_validation_metrics,
             ),
         )
-        if multitask_best_state.get("validation_metrics") is not None:
-            family_refinement_stage_rank = build_family_refinement_rank(
-                multitask_best_state["validation_metrics"]
-            )
+        if reference_family_validation_metrics is not None:
+            family_refinement_stage_rank = build_family_refinement_rank(reference_family_validation_metrics)
 
     family_refinement_stage_rank, family_refined_metrics, _, _ = run_family_refinement_stage(
         model=model,
@@ -4107,13 +4441,16 @@ def train_multitask_nids_v3():
         build_manifest_payload=build_manifest_payload_for_current_state,
         validation_rank_builder=build_family_refinement_rank,
         best_rank=family_refinement_stage_rank,
+        reference_validation_metrics=reference_family_validation_metrics,
         checkpoint_epoch_offset=int(multitask_best_state.get("epoch", -1)) if multitask_best_state is not None else -1,
     )
     if family_refined_metrics is not None:
         print(
             "Family refinement finished. "
             f"RawKnownAcc={family_refined_metrics['known_family_accuracy']:.4f} | "
+            f"RawKnownMacroF1={safe_metric(family_refined_metrics.get('known_family_macro_f1', 0.0)):.4f} | "
             f"KnownAcceptedAcc={family_refined_metrics['known_family_accepted_accuracy']:.4f} | "
+            f"AcceptedKnownMacroF1={safe_metric(family_refined_metrics.get('known_family_accepted_macro_f1', 0.0)):.4f} | "
             f"KnownCoverage={family_refined_metrics['known_family_coverage']:.4f}",
             flush=True,
         )
