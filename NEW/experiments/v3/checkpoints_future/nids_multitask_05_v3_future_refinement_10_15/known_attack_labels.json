@@ -1,0 +1,13 @@
+{
+  "known_attack_labels": [
+    "DoS / DDoS",
+    "Brute Force",
+    "Infiltration",
+    "Web Attacks",
+    "Fuzzers",
+    "Analysis / Backdoors",
+    "Exploits / Shellcode",
+    "Reconnaissance",
+    "Worms / Generic"
+  ]
+}

@@ -22,12 +22,12 @@
     5
   ],
   "thresholds": {
-    "current": 0.9636863470077515,
-    "known": 0.35149428248405457,
+    "current": 0.5,
+    "known": 0.55,
     "future": {
-      "1m": 7.5952552833769005e-06,
-      "3m": 2.977818439831026e-06,
-      "5m": 1.3427566955215298e-05
+      "1m": 0.5,
+      "3m": 0.5,
+      "5m": 0.5
     },
     "ood": 0.5
   },
@@ -49,12 +49,5 @@
     "Exploits / Shellcode",
     "Reconnaissance",
     "Worms / Generic"
-  ],
-  "validation_summary": {
-    "current_pr_auc": 0.9770297054148137,
-    "unknown_risk_pr_auc": 0.0,
-    "future_pr_auc": 0.014225077361830646,
-    "known_family_accepted_accuracy": 0.0989611809732094,
-    "unknown_label_positive_count": 0
-  }
+  ]
 }

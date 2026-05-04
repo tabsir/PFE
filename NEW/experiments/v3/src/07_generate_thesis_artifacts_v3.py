@@ -1224,8 +1224,13 @@ def collect_split_outputs(
 def load_epoch_history(checkpoint_dir, device):
     checkpoint_dir = Path(checkpoint_dir)
     epoch_files = sorted(
-        checkpoint_dir.glob("nids_multitask_epoch_*.pt"),
-        key=base_train.extract_epoch_index,
+        list(checkpoint_dir.glob("nids_multitask_epoch_*.pt"))
+        + list(checkpoint_dir.glob("nids_multitask_future_refine_epoch_*.pt"))
+        + list(checkpoint_dir.glob("nids_multitask_family_refine_epoch_*.pt")),
+        key=lambda path: (
+            0 if path.name.startswith("nids_multitask_epoch_") else 1 if "future_refine" in path.name else 2,
+            base_train.extract_epoch_index(path),
+        ),
     )
     rows = []
     for epoch_path in epoch_files:
@@ -1262,10 +1267,19 @@ def load_epoch_history(checkpoint_dir, device):
         )
         loss_metrics = validation_metrics.get("loss", {})
 
-        epoch_index = int(checkpoint.get("epoch", base_train.extract_epoch_index(epoch_path)))
+        if "future_refine" in epoch_path.name:
+            epoch_index = base_train.extract_epoch_index(epoch_path)
+            stage_name = "future_refinement"
+        elif "family_refine" in epoch_path.name:
+            epoch_index = base_train.extract_epoch_index(epoch_path)
+            stage_name = "family_refinement"
+        else:
+            epoch_index = int(checkpoint.get("epoch", base_train.extract_epoch_index(epoch_path)))
+            stage_name = "main_training"
         future_threshold_values = np.asarray(list(future_thresholds.values()), dtype=np.float64)
         row = {
             "checkpoint_file": epoch_path.name,
+            "stage_name": stage_name,
             "epoch_index_zero_based": epoch_index,
             "epoch_number": epoch_index + 1,
             "run_mode": str(checkpoint.get("run_mode", v3_train.RUN_MODE_CLOSED_SET)),

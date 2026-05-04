@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from tqdm import tqdm
 
 EXPERIMENT_SRC_DIR = Path(__file__).resolve().parent
@@ -44,6 +44,12 @@ DEFAULT_VALID_DIR = str(NEW_DIR / "data" / "nids_src_grouped" / "validation")
 DEFAULT_TEST_DIR = str(NEW_DIR / "data" / "nids_src_grouped" / "test")
 DEFAULT_STATS_PATH = str(NEW_DIR / "nids_normalization_stats.json")
 DEFAULT_DOWNSTREAM_CHECKPOINT_DIR = str(EXPERIMENT_DIR / "checkpoints_future" / "nids_multitask_05_v3_full")
+DEFAULT_FUTURE_REFINEMENT_CHECKPOINT_DIR = str(
+    EXPERIMENT_DIR / "checkpoints_future" / "nids_multitask_05_v3_future_refinement"
+)
+DEFAULT_FAMILY_REFINEMENT_CHECKPOINT_DIR = str(
+    EXPERIMENT_DIR / "checkpoints_future" / "nids_multitask_05_v3_family_refinement"
+)
 DEFAULT_FOUNDATION_CHECKPOINT = str(NEW_DIR / "checkpoints" / "stt_best.pt")
 DEFAULT_MIN_KNOWN_ATTACK_COUNT = 1
 DEFAULT_TRAIN_TARGET_POSITIVE_RATE = base_train.DEFAULT_TRAIN_TARGET_POSITIVE_RATE
@@ -58,6 +64,21 @@ DEFAULT_FUTURE_LOSS_WEIGHT = 1.2
 DEFAULT_RECONSTRUCTION_LOSS_WEIGHT = 0.25
 DEFAULT_FAMILY_SAMPLER_POWER = 0.50
 DEFAULT_FUTURE_POSITIVE_BOOST = 2.00
+DEFAULT_FUTURE_REFINEMENT_EPOCHS = 4
+DEFAULT_FUTURE_REFINEMENT_LR = 1e-3
+DEFAULT_FUTURE_REFINEMENT_TARGET_POSITIVE_RATE = 0.20
+DEFAULT_FUTURE_REFINEMENT_MIN_PR_AUC_GAIN = 0.001
+DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_PR_AUC_DROP = 0.002
+DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_F1_DROP = 0.005
+DEFAULT_FUTURE_REFINEMENT_MAX_OOD_PR_AUC_DROP = 0.010
+DEFAULT_FUTURE_REFINEMENT_MAX_OOD_RECALL_DROP = 0.020
+DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_BALANCED_DROP = 0.010
+DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_COVERAGE_DROP = 0.020
+DEFAULT_FAMILY_REFINEMENT_EPOCHS = 8
+DEFAULT_FAMILY_REFINEMENT_LR = 1e-3
+DEFAULT_FAMILY_REFINEMENT_SAMPLER_POWER = 0.20
+DEFAULT_FAMILY_REFINEMENT_MAX_FAMILY_BOOST = 4.0
+DEFAULT_FAMILY_REFINEMENT_LABEL_SMOOTHING = 0.02
 DEFAULT_FUTURE_HORIZONS_MINUTES = [1, 3, 5]
 DEFAULT_FUTURE_HORIZON_MINUTES = DEFAULT_FUTURE_HORIZONS_MINUTES[-1]
 DEFAULT_PSEUDO_ZERO_DAY_FAMILY_COUNT = 0
@@ -107,6 +128,24 @@ def parse_args():
         "--output-dir",
         default=DEFAULT_DOWNSTREAM_CHECKPOINT_DIR,
         help="Directory where v3 checkpoints and metadata will be written.",
+    )
+    parser.add_argument(
+        "--future-refinement-output-dir",
+        default=DEFAULT_FUTURE_REFINEMENT_CHECKPOINT_DIR,
+        help="Directory where future-only refinement checkpoints and metadata will be written.",
+    )
+    parser.add_argument(
+        "--family-refinement-output-dir",
+        default=DEFAULT_FAMILY_REFINEMENT_CHECKPOINT_DIR,
+        help="Directory where family-only refinement checkpoints and metadata will be written.",
+    )
+    parser.add_argument(
+        "--refinement-source-dir",
+        default=None,
+        help=(
+            "Optional checkpoint directory whose nids_multitask_best.pt will seed future/family refinement. "
+            "Use this for future-horizon transfer experiments without reusing the main output directory."
+        ),
     )
     parser.add_argument(
         "--resume-checkpoint",
@@ -232,6 +271,62 @@ def parse_args():
         type=float,
         default=DEFAULT_FAMILY_SAMPLER_POWER,
         help="Exponent used to upweight rare attack families in the sampler.",
+    )
+    parser.add_argument(
+        "--future-refinement-epochs",
+        type=int,
+        default=DEFAULT_FUTURE_REFINEMENT_EPOCHS,
+        help=(
+            "Extra epochs that train only the future head on benign windows after multitask training. "
+            "The backbone, current head, OOD head, and family head stay frozen."
+        ),
+    )
+    parser.add_argument(
+        "--future-refinement-lr",
+        type=float,
+        default=DEFAULT_FUTURE_REFINEMENT_LR,
+        help="Learning rate for the future-only refinement stage.",
+    )
+    parser.add_argument(
+        "--future-refinement-target-positive-rate",
+        type=float,
+        default=DEFAULT_FUTURE_REFINEMENT_TARGET_POSITIVE_RATE,
+        help=(
+            "Target future-positive rate used by the future-only refinement sampler over benign windows."
+        ),
+    )
+    parser.add_argument(
+        "--family-refinement-epochs",
+        type=int,
+        default=DEFAULT_FAMILY_REFINEMENT_EPOCHS,
+        help=(
+            "Extra epochs that train only the family head on known attack windows after multitask training. "
+            "Backbone and the other heads stay frozen so current and future predictions remain unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--family-refinement-lr",
+        type=float,
+        default=DEFAULT_FAMILY_REFINEMENT_LR,
+        help="Learning rate for the family-only refinement stage.",
+    )
+    parser.add_argument(
+        "--family-refinement-sampler-power",
+        type=float,
+        default=DEFAULT_FAMILY_REFINEMENT_SAMPLER_POWER,
+        help="Mild balancing exponent used only during family-only refinement.",
+    )
+    parser.add_argument(
+        "--family-refinement-max-family-boost",
+        type=float,
+        default=DEFAULT_FAMILY_REFINEMENT_MAX_FAMILY_BOOST,
+        help="Maximum per-family sampling boost applied during family-only refinement.",
+    )
+    parser.add_argument(
+        "--family-refinement-label-smoothing",
+        type=float,
+        default=DEFAULT_FAMILY_REFINEMENT_LABEL_SMOOTHING,
+        help="Label smoothing used only for the family-only refinement loss.",
     )
     parser.add_argument(
         "--future-positive-boost",
@@ -890,6 +985,523 @@ def build_future_pos_weight_tensor(dataset, device):
             dtype=np.float32,
         )
     return torch.tensor(pos_weights, dtype=torch.float32, device=device)
+
+
+def build_future_refinement_loader(
+    dataset,
+    batch_size,
+    num_workers,
+    device,
+    target_positive_rate,
+):
+    benign_indices = np.flatnonzero(dataset.sequence_current_labels == 0)
+    if benign_indices.size == 0:
+        return None, 0, 0, 0.0, 0.0
+
+    benign_future_targets = np.asarray(dataset.future_attack_any_targets[benign_indices], dtype=np.int64)
+    future_positive_count = int(benign_future_targets.sum())
+    if future_positive_count <= 0:
+        return None, int(benign_indices.size), 0, 0.0, 0.0
+
+    sample_weights, observed_positive_rate, effective_positive_rate = (
+        base_train.build_target_rate_sample_weights(
+            benign_future_targets,
+            target_positive_rate,
+        )
+    )
+    subset = Subset(dataset, benign_indices.tolist())
+    sampler = WeightedRandomSampler(
+        weights=torch.from_numpy(np.asarray(sample_weights, dtype=np.float32)),
+        num_samples=len(sample_weights),
+        replacement=True,
+    )
+    loader = DataLoader(
+        subset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=num_workers > 0,
+    )
+    return (
+        loader,
+        int(benign_indices.size),
+        future_positive_count,
+        float(observed_positive_rate),
+        float(effective_positive_rate),
+    )
+
+
+def set_future_refinement_trainable(model):
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+    if model.future_attack_head is not None:
+        for parameter in model.future_attack_head.parameters():
+            parameter.requires_grad = True
+
+
+def future_refinement_candidate_is_acceptable(reference_validation_metrics, candidate_validation_metrics):
+    reference_future = reference_validation_metrics.get("best_future") or {}
+    candidate_future = candidate_validation_metrics.get("best_future") or {}
+    reference_current = reference_validation_metrics["best_current"]
+    candidate_current = candidate_validation_metrics["best_current"]
+    reference_ood = reference_validation_metrics["best_ood"]
+    candidate_ood = candidate_validation_metrics["best_ood"]
+    reference_known = reference_validation_metrics["best_known"]
+    candidate_known = candidate_validation_metrics["best_known"]
+
+    reference_future_pr_auc = safe_metric(reference_future.get("pr_auc"))
+    candidate_future_pr_auc = safe_metric(candidate_future.get("pr_auc"))
+    future_pr_auc_gain = candidate_future_pr_auc - reference_future_pr_auc
+
+    reasons = []
+    if future_pr_auc_gain < DEFAULT_FUTURE_REFINEMENT_MIN_PR_AUC_GAIN:
+        reasons.append(
+            "future_pr_auc_gain="
+            f"{future_pr_auc_gain:.4f} < {DEFAULT_FUTURE_REFINEMENT_MIN_PR_AUC_GAIN:.4f}"
+        )
+
+    current_pr_auc_drop = safe_metric(reference_current.get("pr_auc")) - safe_metric(candidate_current.get("pr_auc"))
+    if current_pr_auc_drop > DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_PR_AUC_DROP:
+        reasons.append(
+            "current_pr_auc_drop="
+            f"{current_pr_auc_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_PR_AUC_DROP:.4f}"
+        )
+
+    current_f1_drop = safe_metric(reference_current.get("f1")) - safe_metric(candidate_current.get("f1"))
+    if current_f1_drop > DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_F1_DROP:
+        reasons.append(
+            "current_f1_drop="
+            f"{current_f1_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_CURRENT_F1_DROP:.4f}"
+        )
+
+    reference_ood_positive_rate = safe_metric(reference_ood.get("positive_rate"))
+    if reference_ood_positive_rate > 0.0:
+        ood_pr_auc_drop = safe_metric(reference_ood.get("pr_auc")) - safe_metric(candidate_ood.get("pr_auc"))
+        if ood_pr_auc_drop > DEFAULT_FUTURE_REFINEMENT_MAX_OOD_PR_AUC_DROP:
+            reasons.append(
+                "ood_pr_auc_drop="
+                f"{ood_pr_auc_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_OOD_PR_AUC_DROP:.4f}"
+            )
+
+        ood_recall_drop = safe_metric(reference_ood.get("recall")) - safe_metric(candidate_ood.get("recall"))
+        if ood_recall_drop > DEFAULT_FUTURE_REFINEMENT_MAX_OOD_RECALL_DROP:
+            reasons.append(
+                "ood_recall_drop="
+                f"{ood_recall_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_OOD_RECALL_DROP:.4f}"
+            )
+
+    known_balanced_drop = safe_metric(reference_known.get("balanced_score")) - safe_metric(
+        candidate_known.get("balanced_score")
+    )
+    if known_balanced_drop > DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_BALANCED_DROP:
+        reasons.append(
+            "known_balanced_drop="
+            f"{known_balanced_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_BALANCED_DROP:.4f}"
+        )
+
+    known_coverage_drop = safe_metric(reference_known.get("known_coverage")) - safe_metric(
+        candidate_known.get("known_coverage")
+    )
+    if known_coverage_drop > DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_COVERAGE_DROP:
+        reasons.append(
+            "known_coverage_drop="
+            f"{known_coverage_drop:.4f} > {DEFAULT_FUTURE_REFINEMENT_MAX_KNOWN_COVERAGE_DROP:.4f}"
+        )
+
+    return len(reasons) == 0, future_pr_auc_gain, reasons
+
+
+def run_future_refinement_stage(
+    *,
+    model,
+    device,
+    train_dataset,
+    valid_loader,
+    batch_size,
+    num_workers,
+    future_refinement_epochs,
+    future_refinement_lr,
+    future_refinement_target_positive_rate,
+    thresholds,
+    checkpoint_dir,
+    build_checkpoint_payload,
+    build_manifest_payload,
+    validation_rank_builder,
+    best_rank,
+    reference_validation_metrics,
+    checkpoint_epoch_offset=-1,
+):
+    if model.future_attack_head is None or future_refinement_epochs <= 0:
+        return best_rank, None, None, None
+
+    (
+        refinement_loader,
+        benign_window_count,
+        future_positive_count,
+        observed_positive_rate,
+        effective_positive_rate,
+    ) = build_future_refinement_loader(
+        train_dataset,
+        batch_size,
+        num_workers,
+        device,
+        future_refinement_target_positive_rate,
+    )
+    if refinement_loader is None or benign_window_count <= 0 or future_positive_count <= 0:
+        return best_rank, None, None, None
+
+    print(
+        "Starting future-only refinement: "
+        f"epochs={future_refinement_epochs}, benign_windows={benign_window_count}, "
+        f"future_positive_windows={future_positive_count}",
+        flush=True,
+    )
+    print(
+        "Future refinement sampler: "
+        f"observed_positive_rate={observed_positive_rate:.4f}, "
+        f"target_positive_rate={future_refinement_target_positive_rate:.4f}, "
+        f"effective_positive_rate={effective_positive_rate:.4f}",
+        flush=True,
+    )
+
+    set_future_refinement_trainable(model)
+    future_parameters = [parameter for parameter in model.future_attack_head.parameters() if parameter.requires_grad]
+    optimizer = optim.AdamW(future_parameters, lr=future_refinement_lr, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    future_loss_fn = nn.BCEWithLogitsLoss(pos_weight=build_future_pos_weight_tensor(train_dataset, device))
+
+    accepted_selection = None
+    accepted_metrics = None
+    accepted_rank = None
+    accepted_score = None
+
+    for refinement_epoch in range(future_refinement_epochs):
+        model.eval()
+        model.future_attack_head.train()
+        running_future_loss = 0.0
+        progress_bar = tqdm(
+            enumerate(refinement_loader),
+            total=len(refinement_loader),
+            desc=f"Future Refinement {refinement_epoch + 1}/{future_refinement_epochs}",
+            file=sys.stdout,
+        )
+
+        for step, batch in progress_bar:
+            cont = batch["continuous"].to(device, non_blocking=True)
+            cat = batch["categorical"].to(device, non_blocking=True)
+            future_targets = batch["future_attack"].float().to(device, non_blocking=True)
+            if future_targets.ndim == 1:
+                future_targets = future_targets.unsqueeze(-1)
+
+            outputs = model(
+                cont,
+                cat,
+                apply_mfm=False,
+                compute_reconstruction=False,
+                reconstruction_mask=None,
+                reconstruction_apply_mfm=False,
+            )
+            future_logits = outputs["future_attack_logits"]
+            if future_logits is not None and future_logits.ndim == 1:
+                future_logits = future_logits.unsqueeze(-1)
+            if future_logits is None:
+                continue
+
+            future_loss = future_loss_fn(future_logits, future_targets)
+
+            optimizer.zero_grad()
+            future_loss.backward()
+            torch.nn.utils.clip_grad_norm_(future_parameters, max_norm=1.0)
+            optimizer.step()
+            scheduler.step()
+
+            running_future_loss += float(future_loss.item())
+            progress_bar.set_postfix({"future": f"{running_future_loss / (step + 1):.4f}"})
+
+        progress_bar.close()
+
+        model.eval()
+        last_validation_metrics = evaluate_downstream_v3(model, valid_loader, device, thresholds)
+        best_current = last_validation_metrics["best_current"]
+        best_ood = last_validation_metrics["best_ood"]
+        best_future = last_validation_metrics.get("best_future") or aggregate_future_metrics({})
+        best_known = last_validation_metrics["best_known"]
+
+        thresholds["current"] = best_current["threshold"]
+        thresholds["known"] = best_known["threshold"]
+        thresholds["future"] = {
+            horizon_label: metrics["threshold"]
+            for horizon_label, metrics in last_validation_metrics.get("best_future_by_horizon", {}).items()
+        }
+        thresholds["ood"] = best_ood["threshold"]
+
+        last_validation_rank = validation_rank_builder(last_validation_metrics)
+        last_validation_score = last_validation_rank[1]
+
+        checkpoint_payload = build_checkpoint_payload(
+            optimizer,
+            scheduler,
+            validation_score=last_validation_score,
+            validation_rank=last_validation_rank,
+            validation_metrics=last_validation_metrics,
+            payload_epoch=checkpoint_epoch_offset + refinement_epoch + 1,
+        )
+        refinement_checkpoint = os.path.join(
+            checkpoint_dir,
+            f"nids_multitask_future_refine_epoch_{refinement_epoch + 1}.pt",
+        )
+        base_train.atomic_torch_save(checkpoint_payload, refinement_checkpoint)
+        dump_run_manifest(checkpoint_dir, build_manifest_payload(last_validation_metrics))
+
+        accepted, future_pr_auc_gain, rejection_reasons = future_refinement_candidate_is_acceptable(
+            reference_validation_metrics,
+            last_validation_metrics,
+        )
+        candidate_selection = (
+            safe_metric(best_future.get("pr_auc")),
+            safe_metric(best_future.get("f1")),
+            last_validation_score,
+        )
+
+        if accepted and (accepted_selection is None or candidate_selection > accepted_selection):
+            accepted_selection = candidate_selection
+            accepted_metrics = last_validation_metrics
+            accepted_rank = last_validation_rank
+            accepted_score = last_validation_score
+            best_rank = last_validation_rank
+            best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
+            base_train.atomic_torch_save(checkpoint_payload, best_checkpoint_path)
+            decision_text = f"accepted future_gain={future_pr_auc_gain:.4f}"
+        else:
+            reason_text = "; ".join(rejection_reasons) if rejection_reasons else "not better than current accepted future refinement"
+            decision_text = f"rejected {reason_text}"
+
+        print(
+            f" Future refinement {refinement_epoch + 1} complete. "
+            f"CurrentPRAUC={best_current['pr_auc']:.4f} CurrentF1={best_current['f1']:.4f} | "
+            f"FutureMacroPRAUC={format_metric_value(best_future.get('pr_auc', float('nan')), 4)} "
+            f"FutureMacroF1={format_metric_value(best_future.get('f1', float('nan')), 4)} | "
+            f"KnownAcceptedAcc={best_known['accepted_accuracy']:.4f} KnownCoverage={best_known['known_coverage']:.4f} | "
+            f"CompositeScore={last_validation_score:.4f} | {decision_text}",
+            flush=True,
+        )
+
+    return best_rank, accepted_metrics, accepted_rank, accepted_score
+
+
+def build_family_refinement_loader(
+    dataset,
+    batch_size,
+    num_workers,
+    device,
+    sampler_power,
+    max_family_boost,
+):
+    known_indices = np.flatnonzero(dataset.known_attack_targets >= 0)
+    if known_indices.size == 0:
+        return None, 0, {}
+
+    subset = Subset(dataset, known_indices.tolist())
+    known_targets = dataset.known_attack_targets[known_indices]
+    family_counts = Counter(int(value) for value in known_targets.tolist())
+    family_sampler_factors = {}
+
+    if sampler_power > 0.0 and family_counts:
+        max_count = float(max(family_counts.values()))
+        family_sampler_factors = {
+            int(family_idx): min(
+                float((max_count / count) ** sampler_power),
+                float(max_family_boost),
+            )
+            for family_idx, count in family_counts.items()
+        }
+        sample_weights = np.asarray(
+            [family_sampler_factors.get(int(target), 1.0) for target in known_targets],
+            dtype=np.float32,
+        )
+        mean_weight = float(sample_weights.mean())
+        if mean_weight > 0.0:
+            sample_weights /= mean_weight
+        sampler = WeightedRandomSampler(
+            weights=torch.from_numpy(sample_weights),
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
+        loader = DataLoader(
+            subset,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            pin_memory=device.type == "cuda",
+            persistent_workers=num_workers > 0,
+        )
+    else:
+        loader = DataLoader(
+            subset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=device.type == "cuda",
+            persistent_workers=num_workers > 0,
+        )
+
+    readable_factors = {
+        dataset.known_attack_names[family_idx]: factor
+        for family_idx, factor in family_sampler_factors.items()
+    }
+    return loader, int(known_indices.size), readable_factors
+
+
+def set_family_refinement_trainable(model):
+    for parameter in model.parameters():
+        parameter.requires_grad = False
+    if model.attack_family_head is not None:
+        for parameter in model.attack_family_head.parameters():
+            parameter.requires_grad = True
+
+
+def run_family_refinement_stage(
+    *,
+    model,
+    device,
+    train_dataset,
+    valid_loader,
+    batch_size,
+    num_workers,
+    family_refinement_epochs,
+    family_refinement_lr,
+    family_refinement_sampler_power,
+    family_refinement_max_family_boost,
+    family_refinement_label_smoothing,
+    thresholds,
+    checkpoint_dir,
+    build_checkpoint_payload,
+    build_manifest_payload,
+    validation_rank_builder,
+    best_rank,
+    checkpoint_epoch_offset=-1,
+):
+    if model.attack_family_head is None or family_refinement_epochs <= 0:
+        return best_rank, None, None, None
+
+    refinement_loader, known_window_count, family_sampler_factors = build_family_refinement_loader(
+        train_dataset,
+        batch_size,
+        num_workers,
+        device,
+        family_refinement_sampler_power,
+        family_refinement_max_family_boost,
+    )
+    if refinement_loader is None or known_window_count <= 0:
+        return best_rank, None, None, None
+
+    print(
+        f"Starting family-only refinement: epochs={family_refinement_epochs}, known_windows={known_window_count}",
+        flush=True,
+    )
+    if family_sampler_factors:
+        print(f"Family refinement sampler factors: {family_sampler_factors}", flush=True)
+
+    set_family_refinement_trainable(model)
+    family_parameters = [parameter for parameter in model.attack_family_head.parameters() if parameter.requires_grad]
+    optimizer = optim.AdamW(family_parameters, lr=family_refinement_lr, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+    family_loss_fn = nn.CrossEntropyLoss(label_smoothing=family_refinement_label_smoothing)
+
+    last_validation_metrics = None
+    last_validation_rank = None
+    last_validation_score = None
+
+    for refinement_epoch in range(family_refinement_epochs):
+        model.eval()
+        model.attack_family_head.train()
+        running_family_loss = 0.0
+        progress_bar = tqdm(
+            enumerate(refinement_loader),
+            total=len(refinement_loader),
+            desc=f"Family Refinement {refinement_epoch + 1}/{family_refinement_epochs}",
+            file=sys.stdout,
+        )
+
+        for step, batch in progress_bar:
+            cont = batch["continuous"].to(device, non_blocking=True)
+            cat = batch["categorical"].to(device, non_blocking=True)
+            known_attack_id = batch["known_attack_id"].to(device, non_blocking=True)
+
+            outputs = model(
+                cont,
+                cat,
+                apply_mfm=False,
+                compute_reconstruction=False,
+                reconstruction_mask=None,
+                reconstruction_apply_mfm=False,
+            )
+            family_logits = outputs["attack_family_logits"]
+            family_loss = family_loss_fn(family_logits, known_attack_id)
+
+            optimizer.zero_grad()
+            family_loss.backward()
+            torch.nn.utils.clip_grad_norm_(family_parameters, max_norm=1.0)
+            optimizer.step()
+            scheduler.step()
+
+            running_family_loss += float(family_loss.item())
+            progress_bar.set_postfix({"family": f"{running_family_loss / (step + 1):.4f}"})
+
+        progress_bar.close()
+
+        model.eval()
+        last_validation_metrics = evaluate_downstream_v3(model, valid_loader, device, thresholds)
+        best_current = last_validation_metrics["best_current"]
+        best_ood = last_validation_metrics["best_ood"]
+        best_future = last_validation_metrics.get("best_future") or aggregate_future_metrics({})
+        best_known = last_validation_metrics["best_known"]
+
+        thresholds["current"] = best_current["threshold"]
+        thresholds["known"] = best_known["threshold"]
+        thresholds["future"] = {
+            horizon_label: metrics["threshold"]
+            for horizon_label, metrics in last_validation_metrics.get("best_future_by_horizon", {}).items()
+        }
+        thresholds["ood"] = best_ood["threshold"]
+
+        last_validation_rank = validation_rank_builder(last_validation_metrics)
+        last_validation_score = last_validation_rank[1]
+
+        checkpoint_payload = build_checkpoint_payload(
+            optimizer,
+            scheduler,
+            validation_score=last_validation_score,
+            validation_rank=last_validation_rank,
+            validation_metrics=last_validation_metrics,
+            payload_epoch=checkpoint_epoch_offset + refinement_epoch + 1,
+        )
+        refinement_checkpoint = os.path.join(
+            checkpoint_dir,
+            f"nids_multitask_family_refine_epoch_{refinement_epoch + 1}.pt",
+        )
+        base_train.atomic_torch_save(checkpoint_payload, refinement_checkpoint)
+
+        dump_run_manifest(checkpoint_dir, build_manifest_payload(last_validation_metrics))
+
+        if last_validation_rank > best_rank:
+            best_rank = last_validation_rank
+            best_checkpoint_path = os.path.join(checkpoint_dir, "nids_multitask_best.pt")
+            base_train.atomic_torch_save(checkpoint_payload, best_checkpoint_path)
+
+        print(
+            f" Family refinement {refinement_epoch + 1} complete. "
+            f"CurrentPRAUC={best_current['pr_auc']:.4f} CurrentF1={best_current['f1']:.4f} | "
+            f"FutureMacroPRAUC={format_metric_value(best_future.get('pr_auc', float('nan')), 4)} "
+            f"FutureMacroF1={format_metric_value(best_future.get('f1', float('nan')), 4)} | "
+            f"KnownAcceptedAcc={best_known['accepted_accuracy']:.4f} KnownCoverage={best_known['known_coverage']:.4f} | "
+            f"RawKnownAcc={last_validation_metrics['known_family_accuracy']:.4f} | "
+            f"FamilySelectionScore={last_validation_score:.4f}",
+            flush=True,
+        )
+
+    return best_rank, last_validation_metrics, last_validation_rank, last_validation_score
 
 
 def build_family_weight_tensor(dataset, device):
@@ -1734,6 +2346,30 @@ def build_validation_rank(
     )
 
 
+def build_family_refinement_rank(validation_metrics):
+    best_known = validation_metrics["best_known"]
+    balanced_score = safe_metric(best_known.get("balanced_score"))
+    accepted_accuracy = safe_metric(best_known.get("accepted_accuracy"))
+    raw_known_accuracy = safe_metric(validation_metrics.get("known_family_accuracy"))
+    known_coverage = safe_metric(best_known.get("known_coverage"))
+    family_unknown_recall = safe_metric(best_known.get("unknown_recall"))
+    unknown_label_positive_count = int(validation_metrics.get("unknown_label_positive_count", 0))
+    target_unknown_recall = safe_metric(best_known.get("target_unknown_recall"))
+    unknown_recall_floor = max(0.0, target_unknown_recall - 0.05)
+    unknown_recall_pass = 1.0
+    if unknown_label_positive_count > 0:
+        unknown_recall_pass = float(family_unknown_recall >= unknown_recall_floor)
+
+    return (
+        unknown_recall_pass,
+        balanced_score,
+        accepted_accuracy,
+        raw_known_accuracy,
+        known_coverage,
+        family_unknown_recall,
+    )
+
+
 def load_best_validation_rank(checkpoint_dir, device, fallback_rank):
     best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
     if not best_checkpoint_path.exists():
@@ -1764,6 +2400,109 @@ def load_best_validation_rank(checkpoint_dir, device, fallback_rank):
     except Exception as exc:
         print(f"Warning: could not load best checkpoint {best_checkpoint_path}: {exc}", flush=True)
         return fallback_rank
+
+
+def load_best_multitask_checkpoint(checkpoint_dir, device):
+    best_checkpoint_path = Path(checkpoint_dir) / "nids_multitask_best.pt"
+    if not best_checkpoint_path.exists():
+        return None, None
+
+    checkpoint = base_train.load_trusted_checkpoint(best_checkpoint_path, device)
+    return best_checkpoint_path, checkpoint
+
+
+def restore_best_checkpoint_for_refinement(
+    checkpoint_dir,
+    device,
+    model,
+    thresholds,
+    future_horizons_minutes,
+    stage_name,
+):
+    best_checkpoint_path, best_checkpoint = load_best_multitask_checkpoint(checkpoint_dir, device)
+    if best_checkpoint is None:
+        print(
+            f"Warning: no saved best checkpoint was found; {stage_name} will start from the last in-memory state.",
+            flush=True,
+        )
+        return thresholds, None, None
+
+    source_state_dict = dict(best_checkpoint["model_state_dict"])
+    expected_state_dict = model.state_dict()
+    dropped_future_head_keys = []
+    for key, value in list(source_state_dict.items()):
+        expected_value = expected_state_dict.get(key)
+        if expected_value is None:
+            continue
+        if expected_value.shape != value.shape:
+            if key.startswith("future_attack_head."):
+                dropped_future_head_keys.append(key)
+                del source_state_dict[key]
+                continue
+            raise ValueError(
+                f"Checkpoint tensor shape mismatch for {key}: {tuple(value.shape)} vs expected {tuple(expected_value.shape)}"
+            )
+
+    incompatible_missing, incompatible_unexpected = model.load_state_dict(source_state_dict, strict=False)
+    incompatible_missing = [key for key in incompatible_missing if not key.startswith("future_attack_head.")]
+    incompatible_unexpected = [key for key in incompatible_unexpected if not key.startswith("future_attack_head.")]
+    if incompatible_missing or incompatible_unexpected:
+        raise ValueError(
+            "Refinement checkpoint is incompatible with the requested architecture. "
+            f"Missing keys: {incompatible_missing} | Unexpected keys: {incompatible_unexpected}"
+        )
+    if dropped_future_head_keys:
+        print(
+            "Future-head shape mismatch detected; keeping the current future head initialization for refinement. "
+            f"Dropped keys: {dropped_future_head_keys}",
+            flush=True,
+        )
+
+    restored_thresholds = dict(best_checkpoint.get("thresholds", thresholds))
+    restored_thresholds["future"] = normalize_future_thresholds(
+        restored_thresholds.get("future"),
+        future_horizons_minutes,
+        default_threshold=0.50,
+    )
+    print(
+        f"Starting {stage_name} from best checkpoint: "
+        f"{best_checkpoint_path.name} (epoch {int(best_checkpoint.get('epoch', -1)) + 1})",
+        flush=True,
+    )
+    return restored_thresholds, best_checkpoint_path, best_checkpoint
+
+
+def seed_refinement_checkpoint_dir(
+    source_checkpoint_path,
+    source_checkpoint,
+    target_checkpoint_dir,
+    *,
+    config_payload=None,
+    manifest_payload=None,
+    checkpoint_overrides=None,
+):
+    if source_checkpoint is None:
+        return None, None
+
+    os.makedirs(target_checkpoint_dir, exist_ok=True)
+    seeded_checkpoint = dict(source_checkpoint)
+    if checkpoint_overrides:
+        seeded_checkpoint.update(checkpoint_overrides)
+    seeded_checkpoint["output_dir"] = target_checkpoint_dir
+    target_best_path = Path(target_checkpoint_dir) / "nids_multitask_best.pt"
+    base_train.atomic_torch_save(seeded_checkpoint, target_best_path)
+
+    if config_payload is not None:
+        dump_variant_config(target_checkpoint_dir, config_payload)
+    if manifest_payload is not None:
+        dump_run_manifest(target_checkpoint_dir, manifest_payload)
+
+    print(
+        "Seeded refinement directory: "
+        f"{target_checkpoint_dir} from {source_checkpoint_path}",
+        flush=True,
+    )
+    return target_best_path, seeded_checkpoint
 
 
 def ensure_variant_checkpoint_dir_compatible(checkpoint_dir, expected_config, device):
@@ -1919,6 +2658,9 @@ def build_training_checkpoint_payload(
     future_loss_weight,
     reconstruction_loss_weight,
     family_sampler_power,
+    future_refinement_epochs,
+    future_refinement_lr,
+    future_refinement_target_positive_rate,
     future_positive_boost,
     run_mode,
     thesis_claim,
@@ -1971,6 +2713,9 @@ def build_training_checkpoint_payload(
         "future_loss_weight": future_loss_weight,
         "reconstruction_loss_weight": reconstruction_loss_weight,
         "family_sampler_power": family_sampler_power,
+        "future_refinement_epochs": future_refinement_epochs,
+        "future_refinement_lr": future_refinement_lr,
+        "future_refinement_target_positive_rate": future_refinement_target_positive_rate,
         "future_positive_boost": future_positive_boost,
         "run_mode": run_mode,
         "thesis_claim": thesis_claim,
@@ -2061,6 +2806,14 @@ def train_multitask_nids_v3():
     future_loss_weight = args.future_loss_weight if future_task_enabled else 0.0
     reconstruction_loss_weight = args.reconstruction_loss_weight
     family_sampler_power = args.family_sampler_power
+    future_refinement_epochs = args.future_refinement_epochs
+    future_refinement_lr = args.future_refinement_lr
+    future_refinement_target_positive_rate = args.future_refinement_target_positive_rate
+    family_refinement_epochs = args.family_refinement_epochs
+    family_refinement_lr = args.family_refinement_lr
+    family_refinement_sampler_power = args.family_refinement_sampler_power
+    family_refinement_max_family_boost = args.family_refinement_max_family_boost
+    family_refinement_label_smoothing = args.family_refinement_label_smoothing
     future_positive_boost = args.future_positive_boost
     use_reconstruction_hybrid_ood = bool(args.use_reconstruction_hybrid_ood)
     run_mode_settings = resolve_run_mode_settings(args)
@@ -2110,6 +2863,32 @@ def train_multitask_nids_v3():
         )
     if family_sampler_power < 0.0:
         raise ValueError(f"family_sampler_power must be >= 0, got {family_sampler_power}")
+    if future_refinement_epochs < 0:
+        raise ValueError(f"future_refinement_epochs must be >= 0, got {future_refinement_epochs}")
+    if future_refinement_lr <= 0.0:
+        raise ValueError(f"future_refinement_lr must be > 0, got {future_refinement_lr}")
+    if not 0.0 < future_refinement_target_positive_rate < 1.0:
+        raise ValueError(
+            "future_refinement_target_positive_rate must be in (0, 1), got "
+            f"{future_refinement_target_positive_rate}"
+        )
+    if family_refinement_epochs < 0:
+        raise ValueError(f"family_refinement_epochs must be >= 0, got {family_refinement_epochs}")
+    if family_refinement_lr <= 0.0:
+        raise ValueError(f"family_refinement_lr must be > 0, got {family_refinement_lr}")
+    if family_refinement_sampler_power < 0.0:
+        raise ValueError(
+            f"family_refinement_sampler_power must be >= 0, got {family_refinement_sampler_power}"
+        )
+    if family_refinement_max_family_boost < 1.0:
+        raise ValueError(
+            f"family_refinement_max_family_boost must be >= 1, got {family_refinement_max_family_boost}"
+        )
+    if not 0.0 <= family_refinement_label_smoothing < 1.0:
+        raise ValueError(
+            "family_refinement_label_smoothing must be in [0, 1), got "
+            f"{family_refinement_label_smoothing}"
+        )
     if future_positive_boost <= 0.0:
         raise ValueError(f"future_positive_boost must be > 0, got {future_positive_boost}")
     if pseudo_zero_day_rotation_size < 0:
@@ -2137,10 +2916,24 @@ def train_multitask_nids_v3():
     test_dir = DEFAULT_TEST_DIR
     stats_path = DEFAULT_STATS_PATH
     checkpoint_dir = args.output_dir
+    future_refinement_output_dir = args.future_refinement_output_dir
+    family_refinement_output_dir = args.family_refinement_output_dir
+    refinement_source_dir = args.refinement_source_dir
     foundation_checkpoint = args.foundation_checkpoint
     resume_checkpoint = args.resume_checkpoint
     os.makedirs(checkpoint_dir, exist_ok=True)
 
+    active_output_dirs = [os.path.abspath(checkpoint_dir)]
+    if future_task_enabled or family_refinement_epochs > 0:
+        active_output_dirs.append(os.path.abspath(future_refinement_output_dir))
+    if family_refinement_epochs > 0:
+        active_output_dirs.append(os.path.abspath(family_refinement_output_dir))
+    if len(active_output_dirs) != len(set(active_output_dirs)):
+        raise ValueError(
+            "Main, future-refinement, and family-refinement output directories must be distinct when their stages are active."
+        )
+
+    # The baseline output directory should stay reusable across future-only and family-only reruns.
     base_expected_config = {
         "run_mode": run_mode,
         "seq_len": seq_len,
@@ -2174,6 +2967,10 @@ def train_multitask_nids_v3():
 
     print(f"Foundation checkpoint: {foundation_checkpoint}", flush=True)
     print(f"Downstream output directory: {checkpoint_dir}", flush=True)
+    print(f"Future refinement output directory: {future_refinement_output_dir}", flush=True)
+    print(f"Family refinement output directory: {family_refinement_output_dir}", flush=True)
+    if refinement_source_dir:
+        print(f"Refinement source directory: {refinement_source_dir}", flush=True)
     print(f"Run mode: {run_mode}", flush=True)
     print(f"Thesis claim policy: {thesis_claim}", flush=True)
     print(f"Future task enabled: {future_task_enabled}", flush=True)
@@ -2195,6 +2992,20 @@ def train_multitask_nids_v3():
     print(f"Unknown head policy: {unknown_head_policy}", flush=True)
     print(f"Hybrid reconstruction-backed unknown risk: {use_reconstruction_hybrid_ood}", flush=True)
     print(f"Family sampler power: {family_sampler_power:.3f}", flush=True)
+    print(
+        "Future refinement: "
+        f"epochs={future_refinement_epochs}, lr={future_refinement_lr:.5f}, "
+        f"target_positive_rate={future_refinement_target_positive_rate:.3f}",
+        flush=True,
+    )
+    print(
+        "Family refinement: "
+        f"epochs={family_refinement_epochs}, lr={family_refinement_lr:.5f}, "
+        f"sampler_power={family_refinement_sampler_power:.3f}, "
+        f"max_boost={family_refinement_max_family_boost:.2f}, "
+        f"label_smoothing={family_refinement_label_smoothing:.3f}",
+        flush=True,
+    )
     print(f"Future positive boost: {future_positive_boost:.3f}", flush=True)
     print(f"Rotate pseudo-zero-day families: {rotate_pseudo_zero_day_families}", flush=True)
     print(f"Pseudo-zero-day rotation size: {pseudo_zero_day_rotation_size}", flush=True)
@@ -2319,19 +3130,21 @@ def train_multitask_nids_v3():
     else:
         print("Epoch rotation family pool: disabled", flush=True)
 
-    dump_variant_config(
-        checkpoint_dir,
-        {
-            **base_expected_config,
-            "effective_pseudo_zero_day_families": pseudo_zero_day_families,
-            "known_attack_labels": train_dataset.known_attack_names,
-            "train_attack_family_counts": dict(train_dataset.attack_family_counts),
-            "validation_attack_family_counts": dict(valid_dataset.attack_family_counts),
-            "task_activation": task_activation,
-            "train_unknown_positive_count": train_unknown_positive_count,
-            "validation_unknown_positive_count": valid_unknown_positive_count,
-        },
-    )
+    variant_config_payload = {
+        **base_expected_config,
+        "effective_pseudo_zero_day_families": pseudo_zero_day_families,
+        "known_attack_labels": train_dataset.known_attack_names,
+        "train_attack_family_counts": dict(train_dataset.attack_family_counts),
+        "validation_attack_family_counts": dict(valid_dataset.attack_family_counts),
+        "task_activation": task_activation,
+        "train_unknown_positive_count": train_unknown_positive_count,
+        "validation_unknown_positive_count": valid_unknown_positive_count,
+        "refinement_source_dir": refinement_source_dir,
+        "future_refinement_output_dir": future_refinement_output_dir,
+        "family_refinement_output_dir": family_refinement_output_dir,
+    }
+
+    dump_variant_config(checkpoint_dir, variant_config_payload)
 
     dump_run_manifest(
         checkpoint_dir,
@@ -2413,9 +3226,22 @@ def train_multitask_nids_v3():
             dtype=torch.float32,
         )
         ood_loss_fn = nn.BCEWithLogitsLoss(pos_weight=ood_pos_weight)
+    family_weight_tensor = build_family_weight_tensor(train_dataset, device)
+    family_loss_fn = (
+        nn.CrossEntropyLoss(weight=family_weight_tensor, label_smoothing=0.1)
+        if family_weight_tensor is not None
+        else None
+    )
+    unknown_family_loss_fn = (
+        base_train.compute_unknown_family_regularization_loss
+        if train_dataset.known_attack_names
+        else None
+    )
     evaluate_downstream_v3.current_loss_fn = current_loss_fn
     evaluate_downstream_v3.future_loss_fn = future_loss_fn
     evaluate_downstream_v3.ood_loss_fn = ood_loss_fn
+    evaluate_downstream_v3.family_loss_fn = family_loss_fn
+    evaluate_downstream_v3.unknown_family_loss_fn = unknown_family_loss_fn
     evaluate_downstream_v3.loss_weights = loss_weights
     evaluate_downstream_v3.threshold_target_recall = threshold_target_recall
     evaluate_downstream_v3.future_threshold_target_recall = future_threshold_target_recall
@@ -2606,6 +3432,91 @@ def train_multitask_nids_v3():
         if start_epoch >= epochs:
             print("Resume checkpoint already reached the requested total epoch count. Nothing to do.", flush=True)
             return
+
+    def build_manifest_payload_for_current_state(current_validation_metrics):
+        return build_run_manifest_payload(
+            run_mode=run_mode,
+            thesis_claim=thesis_claim,
+            novelty_score_mode=novelty_score_mode,
+            decision_policy=decision_policy,
+            unknown_head_policy=unknown_head_policy,
+            task_activation=task_activation,
+            requested_pseudo_zero_day_families=requested_pseudo_zero_day_families,
+            pseudo_zero_day_families=pseudo_zero_day_families,
+            rotate_pseudo_zero_day_families=rotate_pseudo_zero_day_families,
+            pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
+            future_horizons_minutes=future_horizons_minutes,
+            thresholds=thresholds,
+            loss_weights=loss_weights,
+            known_attack_labels=train_dataset.known_attack_names,
+            validation_metrics=current_validation_metrics,
+        )
+
+    def build_checkpoint_payload_for_current_state(
+        current_optimizer,
+        current_scheduler,
+        *,
+        validation_score,
+        validation_rank,
+        validation_metrics,
+        payload_epoch,
+        active_checkpoint_dir=None,
+    ):
+        payload_checkpoint_dir = active_checkpoint_dir or checkpoint_dir
+        return build_training_checkpoint_payload(
+            epoch=payload_epoch,
+            model=model,
+            optimizer=current_optimizer,
+            scheduler=current_scheduler,
+            foundation_checkpoint=foundation_checkpoint,
+            checkpoint_dir=payload_checkpoint_dir,
+            known_attack_labels=train_dataset.known_attack_names,
+            requested_pseudo_zero_day_families=requested_pseudo_zero_day_families,
+            pseudo_zero_day_family_count=pseudo_zero_day_family_count,
+            pseudo_zero_day_families=pseudo_zero_day_families,
+            epoch_unknown_attack_families=sorted(train_dataset.epoch_unknown_attack_families),
+            rotation_family_pool=rotation_family_pool,
+            rotate_pseudo_zero_day_families=rotate_pseudo_zero_day_families,
+            pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
+            future_horizon_minutes=future_horizon_minutes,
+            future_horizons_minutes=future_horizons_minutes,
+            future_task_enabled=future_task_enabled,
+            seq_len=seq_len,
+            stride=stride,
+            current_label_rule=current_label_rule,
+            train_target_positive_rate=train_target_positive_rate,
+            threshold_target_recall=threshold_target_recall,
+            future_threshold_target_recall=future_threshold_target_recall,
+            ood_threshold_target_recall=ood_threshold_target_recall,
+            known_target_unknown_recall=known_target_unknown_recall,
+            unknown_family_loss_weight=unknown_family_loss_weight,
+            ood_loss_weight=ood_loss_weight,
+            family_loss_weight=family_loss_weight,
+            future_loss_weight=future_loss_weight,
+            reconstruction_loss_weight=reconstruction_loss_weight,
+            family_sampler_power=family_sampler_power,
+            future_refinement_epochs=future_refinement_epochs,
+            future_refinement_lr=future_refinement_lr,
+            future_refinement_target_positive_rate=future_refinement_target_positive_rate,
+            future_positive_boost=future_positive_boost,
+            run_mode=run_mode,
+            thesis_claim=thesis_claim,
+            novelty_score_mode=novelty_score_mode,
+            decision_policy=decision_policy,
+            unknown_head_policy=unknown_head_policy,
+            task_activation=task_activation,
+            use_reconstruction_hybrid_ood=use_reconstruction_hybrid_ood,
+            unknown_head_active=unknown_head_active,
+            reconstruction_train_mae_mask_ratio=foundation_mask_ratios["train_mae_mask_ratio"],
+            reconstruction_train_mfm_mask_ratio=foundation_mask_ratios["train_mfm_mask_ratio"],
+            reconstruction_validation_mae_mask_ratio=foundation_mask_ratios["validation_mae_mask_ratio"],
+            reconstruction_validation_mfm_mask_ratio=foundation_mask_ratios["validation_mfm_mask_ratio"],
+            loss_weights=loss_weights,
+            thresholds=thresholds,
+            validation_score=validation_score,
+            validation_rank=validation_rank,
+            validation_metrics=validation_metrics,
+        )
 
     for epoch in range(start_epoch, epochs):
         print(f"Starting downstream epoch {epoch + 1}/{epochs}...", flush=True)
@@ -2841,6 +3752,9 @@ def train_multitask_nids_v3():
                 future_loss_weight=future_loss_weight,
                 reconstruction_loss_weight=reconstruction_loss_weight,
                 family_sampler_power=family_sampler_power,
+                future_refinement_epochs=future_refinement_epochs,
+                future_refinement_lr=future_refinement_lr,
+                future_refinement_target_positive_rate=future_refinement_target_positive_rate,
                 future_positive_boost=future_positive_boost,
                 run_mode=run_mode,
                 thesis_claim=thesis_claim,
@@ -2941,6 +3855,9 @@ def train_multitask_nids_v3():
                 future_loss_weight=future_loss_weight,
                 reconstruction_loss_weight=reconstruction_loss_weight,
                 family_sampler_power=family_sampler_power,
+                future_refinement_epochs=future_refinement_epochs,
+                future_refinement_lr=future_refinement_lr,
+                future_refinement_target_positive_rate=future_refinement_target_positive_rate,
                 future_positive_boost=future_positive_boost,
                 run_mode=run_mode,
                 thesis_claim=thesis_claim,
@@ -2974,6 +3891,232 @@ def train_multitask_nids_v3():
                 flush=True,
             )
             return
+
+    future_refinement_seeded_rank = best_rank
+    future_refinement_source_dir = refinement_source_dir or checkpoint_dir
+    future_stage_enabled = future_task_enabled and future_refinement_epochs > 0
+    family_stage_enabled = family_refinement_epochs > 0
+    existing_future_refinement_best = Path(future_refinement_output_dir) / "nids_multitask_best.pt"
+    use_existing_future_refinement_best = (
+        future_task_enabled
+        and family_stage_enabled
+        and not future_stage_enabled
+        and existing_future_refinement_best.exists()
+    )
+    future_stage_seed_required = future_task_enabled and (
+        future_refinement_epochs > 0
+        or (family_refinement_epochs > 0 and not use_existing_future_refinement_best)
+    )
+
+    if use_existing_future_refinement_best:
+        future_refinement_source_dir = future_refinement_output_dir
+        future_refinement_seeded_rank = load_best_validation_rank(
+            future_refinement_output_dir,
+            device,
+            best_rank,
+        )
+        print(
+            "Using existing future refinement best checkpoint as the family refinement source: "
+            f"{existing_future_refinement_best}",
+            flush=True,
+        )
+
+    if future_stage_seed_required:
+        os.makedirs(future_refinement_output_dir, exist_ok=True)
+        thresholds, source_best_path, multitask_best_state = restore_best_checkpoint_for_refinement(
+            future_refinement_source_dir,
+            device,
+            model,
+            thresholds,
+            future_horizons_minutes,
+            "future refinement",
+        )
+
+        reference_validation_metrics = None
+        if multitask_best_state is not None:
+            source_future_horizons = normalize_future_horizons_minutes(
+                multitask_best_state.get("future_horizons_minutes"),
+                multitask_best_state.get("future_horizon_minutes"),
+            )
+            if source_future_horizons == future_horizons_minutes:
+                reference_validation_metrics = multitask_best_state.get("validation_metrics")
+        if reference_validation_metrics is None:
+            model.eval()
+            reference_validation_metrics = evaluate_downstream_v3(model, valid_loader, device, thresholds)
+
+        reference_validation_rank = build_validation_rank(
+            reference_validation_metrics,
+            future_task_enabled,
+            ood_threshold_target_recall=ood_threshold_target_recall,
+        )
+        future_refinement_seeded_rank = reference_validation_rank
+
+        if multitask_best_state is not None:
+            seed_refinement_checkpoint_dir(
+                source_best_path,
+                multitask_best_state,
+                future_refinement_output_dir,
+                config_payload={
+                    **variant_config_payload,
+                    "refinement_stage": "future",
+                    "refinement_source_dir": future_refinement_source_dir,
+                },
+                manifest_payload=build_run_manifest_payload(
+                    run_mode=run_mode,
+                    thesis_claim=thesis_claim,
+                    novelty_score_mode=novelty_score_mode,
+                    decision_policy=decision_policy,
+                    unknown_head_policy=unknown_head_policy,
+                    task_activation=task_activation,
+                    requested_pseudo_zero_day_families=requested_pseudo_zero_day_families,
+                    pseudo_zero_day_families=pseudo_zero_day_families,
+                    rotate_pseudo_zero_day_families=rotate_pseudo_zero_day_families,
+                    pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
+                    future_horizons_minutes=future_horizons_minutes,
+                    thresholds=thresholds,
+                    loss_weights=loss_weights,
+                    known_attack_labels=train_dataset.known_attack_names,
+                    validation_metrics=reference_validation_metrics,
+                ),
+                checkpoint_overrides={
+                    "model_state_dict": model.state_dict(),
+                    "thresholds": thresholds,
+                    "future_horizons_minutes": future_horizons_minutes,
+                    "future_horizon_minutes": future_horizon_minutes,
+                    "validation_metrics": reference_validation_metrics,
+                    "validation_rank": list(reference_validation_rank),
+                    "validation_rank_version": VALIDATION_RANK_VERSION,
+                    "validation_score": reference_validation_rank[1],
+                },
+            )
+
+        if future_stage_enabled:
+            future_refinement_seeded_rank, future_refined_metrics, _, _ = run_future_refinement_stage(
+                model=model,
+                device=device,
+                train_dataset=train_dataset,
+                valid_loader=valid_loader,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                future_refinement_epochs=future_refinement_epochs,
+                future_refinement_lr=future_refinement_lr,
+                future_refinement_target_positive_rate=future_refinement_target_positive_rate,
+                thresholds=thresholds,
+                checkpoint_dir=future_refinement_output_dir,
+                build_checkpoint_payload=lambda current_optimizer, current_scheduler, *, validation_score, validation_rank, validation_metrics, payload_epoch: build_checkpoint_payload_for_current_state(
+                    current_optimizer,
+                    current_scheduler,
+                    validation_score=validation_score,
+                    validation_rank=validation_rank,
+                    validation_metrics=validation_metrics,
+                    payload_epoch=payload_epoch,
+                    active_checkpoint_dir=future_refinement_output_dir,
+                ),
+                build_manifest_payload=build_manifest_payload_for_current_state,
+                validation_rank_builder=lambda metrics: build_validation_rank(
+                    metrics,
+                    future_task_enabled,
+                    ood_threshold_target_recall=ood_threshold_target_recall,
+                ),
+                best_rank=future_refinement_seeded_rank,
+                reference_validation_metrics=reference_validation_metrics,
+                checkpoint_epoch_offset=int(multitask_best_state.get("epoch", -1)) if multitask_best_state is not None else -1,
+            )
+            if future_refined_metrics is not None:
+                print(
+                    "Future refinement finished. "
+                    f"FutureMacroPRAUC={safe_metric((future_refined_metrics.get('best_future') or {}).get('pr_auc', 0.0)):.4f} | "
+                    f"FutureMacroF1={safe_metric((future_refined_metrics.get('best_future') or {}).get('f1', 0.0)):.4f}",
+                    flush=True,
+                )
+        else:
+            print(
+                "Future refinement epochs set to 0. Keeping the seeded baseline checkpoint in the future refinement directory.",
+                flush=True,
+            )
+        future_refinement_source_dir = future_refinement_output_dir
+
+    family_refinement_source_dir = future_refinement_source_dir
+    os.makedirs(family_refinement_output_dir, exist_ok=True)
+    thresholds, multitask_best_path, multitask_best_state = restore_best_checkpoint_for_refinement(
+        family_refinement_source_dir,
+        device,
+        model,
+        thresholds,
+        future_horizons_minutes,
+        "family refinement",
+    )
+
+    family_refinement_stage_rank = (-1.0, -float("inf"), -float("inf"), -float("inf"), -float("inf"), -float("inf"))
+    if multitask_best_state is not None:
+        seed_refinement_checkpoint_dir(
+            multitask_best_path,
+            multitask_best_state,
+            family_refinement_output_dir,
+            config_payload={
+                **variant_config_payload,
+                "refinement_stage": "family",
+                "refinement_source_dir": family_refinement_source_dir,
+            },
+            manifest_payload=build_run_manifest_payload(
+                run_mode=run_mode,
+                thesis_claim=thesis_claim,
+                novelty_score_mode=novelty_score_mode,
+                decision_policy=decision_policy,
+                unknown_head_policy=unknown_head_policy,
+                task_activation=task_activation,
+                requested_pseudo_zero_day_families=requested_pseudo_zero_day_families,
+                pseudo_zero_day_families=pseudo_zero_day_families,
+                rotate_pseudo_zero_day_families=rotate_pseudo_zero_day_families,
+                pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
+                future_horizons_minutes=future_horizons_minutes,
+                thresholds=thresholds,
+                loss_weights=loss_weights,
+                known_attack_labels=train_dataset.known_attack_names,
+                validation_metrics=multitask_best_state.get("validation_metrics"),
+            ),
+        )
+        if multitask_best_state.get("validation_metrics") is not None:
+            family_refinement_stage_rank = build_family_refinement_rank(
+                multitask_best_state["validation_metrics"]
+            )
+
+    family_refinement_stage_rank, family_refined_metrics, _, _ = run_family_refinement_stage(
+        model=model,
+        device=device,
+        train_dataset=train_dataset,
+        valid_loader=valid_loader,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        family_refinement_epochs=family_refinement_epochs,
+        family_refinement_lr=family_refinement_lr,
+        family_refinement_sampler_power=family_refinement_sampler_power,
+        family_refinement_max_family_boost=family_refinement_max_family_boost,
+        family_refinement_label_smoothing=family_refinement_label_smoothing,
+        thresholds=thresholds,
+        checkpoint_dir=family_refinement_output_dir,
+        build_checkpoint_payload=lambda current_optimizer, current_scheduler, *, validation_score, validation_rank, validation_metrics, payload_epoch: build_checkpoint_payload_for_current_state(
+            current_optimizer,
+            current_scheduler,
+            validation_score=validation_score,
+            validation_rank=validation_rank,
+            validation_metrics=validation_metrics,
+            payload_epoch=payload_epoch,
+            active_checkpoint_dir=family_refinement_output_dir,
+        ),
+        build_manifest_payload=build_manifest_payload_for_current_state,
+        validation_rank_builder=build_family_refinement_rank,
+        best_rank=family_refinement_stage_rank,
+        checkpoint_epoch_offset=int(multitask_best_state.get("epoch", -1)) if multitask_best_state is not None else -1,
+    )
+    if family_refined_metrics is not None:
+        print(
+            "Family refinement finished. "
+            f"RawKnownAcc={family_refined_metrics['known_family_accuracy']:.4f} | "
+            f"KnownAcceptedAcc={family_refined_metrics['known_family_accepted_accuracy']:.4f} | "
+            f"KnownCoverage={family_refined_metrics['known_family_coverage']:.4f}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

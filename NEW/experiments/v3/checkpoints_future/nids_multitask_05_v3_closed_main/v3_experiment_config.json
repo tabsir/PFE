@@ -73,5 +73,8 @@
     "reconstruction_novelty_active": true
   },
   "train_unknown_positive_count": 0,
-  "validation_unknown_positive_count": 0
+  "validation_unknown_positive_count": 0,
+  "refinement_source_dir": null,
+  "future_refinement_output_dir": "/home/aka/PFE-code/NEW/experiments/v3/checkpoints_future/nids_multitask_05_v3_future_refinement",
+  "family_refinement_output_dir": "/home/aka/PFE-code/NEW/experiments/v3/checkpoints_future/nids_multitask_05_v3_family_refinement"
 }

@@ -1,0 +1,58 @@
+{
+  "run_mode": "closed_set_deployment",
+  "thesis_claim": "known_attack_detection_with_novelty_backed_unknown_risk",
+  "novelty_score_mode": "combined_mae_mfm",
+  "decision_policy": "two_stage_current_then_novelty",
+  "unknown_head_policy": "conditional_on_unknown_labels",
+  "task_activation": {
+    "current_attack_head_active": true,
+    "future_head_active": true,
+    "family_head_active": true,
+    "unknown_head_active": false,
+    "reconstruction_auxiliary_active": true,
+    "reconstruction_novelty_active": true
+  },
+  "requested_pseudo_zero_day_families": [],
+  "effective_pseudo_zero_day_families": [],
+  "rotate_pseudo_zero_day_families": false,
+  "pseudo_zero_day_rotation_size": 0,
+  "future_horizons_minutes": [
+    10,
+    15
+  ],
+  "thresholds": {
+    "current": 0.9650924801826477,
+    "known": 0.28,
+    "future": {
+      "10m": 0.7964892983436584,
+      "15m": 0.9101182222366333
+    },
+    "ood": 0.5
+  },
+  "loss_weights": {
+    "current": 2.0,
+    "family": 1.5,
+    "future": 1.2,
+    "ood": 1.5,
+    "reconstruction": 0.25,
+    "unknown_regularizer": 0.25
+  },
+  "known_attack_labels": [
+    "DoS / DDoS",
+    "Brute Force",
+    "Infiltration",
+    "Web Attacks",
+    "Fuzzers",
+    "Analysis / Backdoors",
+    "Exploits / Shellcode",
+    "Reconnaissance",
+    "Worms / Generic"
+  ],
+  "validation_summary": {
+    "current_pr_auc": 0.9774087361889762,
+    "unknown_risk_pr_auc": 0.0,
+    "future_pr_auc": 0.04033077276272749,
+    "known_family_accepted_accuracy": 0.59941045539313,
+    "unknown_label_positive_count": 0
+  }
+}
