@@ -14,8 +14,8 @@ This script rebuilds the grouped NIDS corpus from the combined upstream data:
    A session breaks when the same source IP is inactive for more than
    HOST_SESSION_GAP_MINUTES.
 3. Build group-level metadata and assign new splits using group-safe logic:
-   - family-aware interleaved assignment for attack-bearing host sessions
-   - dedicated held-out OOD split for Botnets sessions
+    - family-aware interleaved assignment for attack-bearing host sessions
+    - dedicated held-out OOD split for configurable attack families
    - benign-group quotas for validation/test to keep ID evaluation informative
 4. Materialize grouped HF datasets under data/nids_src_grouped/{...}.
 
@@ -23,7 +23,7 @@ Primary output splits consumed by the training code stay stable:
   train / validation / test
 
 Additional output split:
-  test_ood   -> held-out Botnets host sessions for unknown-family evaluation
+    test_ood   -> held-out host sessions for unknown-family evaluation
 
 This file is the ETL authority for grouped downstream data.
 
@@ -89,7 +89,7 @@ INTERLEAVED_SPLIT_PATTERN = (
 MIN_FAMILY_GROUPS_FOR_ID_EVAL = 8
 MIN_FAMILY_GROUPS_FOR_SPLIT_COVERAGE = 3
 ID_EVAL_TARGET_ATTACK_RATE = 0.08
-OOD_HOLDOUT_FAMILIES = {"Botnets"}
+DEFAULT_OOD_HOLDOUT_FAMILIES = ("Botnets",)
 
 ROWS_PER_ARROW_SHARD = 2_000_000
 MATERIALIZATION_SELECT_BATCH_ROWS = 100_000
@@ -148,6 +148,12 @@ def parse_args():
         action="store_true",
         help="Resume grouped split materialization from the last saved split plans instead of recomputing planning.",
     )
+    parser.add_argument(
+        "--ood-holdout-families",
+        nargs="*",
+        default=list(DEFAULT_OOD_HOLDOUT_FAMILIES),
+        help="Attack families assigned to test_ood. Defaults to Botnets.",
+    )
     return parser.parse_args()
 
 
@@ -189,6 +195,15 @@ def family_sort_key(family_name):
         return (0, PROJECT_ATTACK_FAMILY_ORDER.index(family_name))
     except ValueError:
         return (1, family_name)
+
+
+def normalize_holdout_families(family_names):
+    normalized = set()
+    for family_name in family_names:
+        mapped_name = map_attack_family(family_name)
+        if mapped_name != "Benign":
+            normalized.add(mapped_name)
+    return sorted(normalized, key=family_sort_key)
 
 
 def ensure_input_splits_exist():
@@ -305,12 +320,12 @@ def build_group_metadata(planning):
     return group_meta, attack_family_presence
 
 
-def assign_attack_groups(group_meta, attack_family_presence):
+def assign_attack_groups(group_meta, attack_family_presence, ood_holdout_families):
     print("Assigning attack-bearing host sessions to ID and OOD splits ...", flush=True)
     attack_group_mask = group_meta["attack_rows"] > 0
     ood_group_ids = set(
         attack_family_presence.loc[
-            attack_family_presence["attack_family"].isin(OOD_HOLDOUT_FAMILIES),
+            attack_family_presence["attack_family"].isin(ood_holdout_families),
             "sequence_group_id",
         ].tolist()
     )
@@ -318,7 +333,7 @@ def assign_attack_groups(group_meta, attack_family_presence):
     group_meta.loc[ood_mask, NEW_SPLIT_COL] = "test_ood"
 
     assignable_presence = attack_family_presence.loc[
-        ~attack_family_presence["attack_family"].isin(OOD_HOLDOUT_FAMILIES)
+        ~attack_family_presence["attack_family"].isin(ood_holdout_families)
         & ~attack_family_presence["sequence_group_id"].isin(ood_group_ids)
     ].copy()
 
@@ -464,7 +479,7 @@ def assign_benign_groups(group_meta):
     return group_meta, benign_targets
 
 
-def build_split_summary(planning, group_meta, rare_train_only_families):
+def build_split_summary(planning, group_meta, rare_train_only_families, ood_holdout_families):
     summary = {
         "config": {
             "host_session_gap_minutes": HOST_SESSION_GAP_MINUTES,
@@ -472,7 +487,7 @@ def build_split_summary(planning, group_meta, rare_train_only_families):
             "validation_ratio": VALIDATION_RATIO,
             "test_ratio": TEST_RATIO,
             "id_eval_target_attack_rate": ID_EVAL_TARGET_ATTACK_RATE,
-            "ood_holdout_families": sorted(OOD_HOLDOUT_FAMILIES),
+            "ood_holdout_families": list(ood_holdout_families),
             "min_family_groups_for_split_coverage": MIN_FAMILY_GROUPS_FOR_SPLIT_COVERAGE,
             "min_family_groups_for_id_eval": MIN_FAMILY_GROUPS_FOR_ID_EVAL,
         },
@@ -762,10 +777,12 @@ def materialize_outputs(summary, resume_materialization=False):
 
 def main():
     args = parse_args()
+    ood_holdout_families = normalize_holdout_families(args.ood_holdout_families)
     print("=" * 78)
     print("Rebuilding host-session NIDS splits with family-aware split assignment")
     print("=" * 78)
     ensure_input_splits_exist()
+    print(f"OOD holdout families: {ood_holdout_families}", flush=True)
 
     if args.resume_materialization:
         summary = load_resume_state()
@@ -798,13 +815,22 @@ def main():
         flush=True,
     )
 
-    group_meta, rare_train_only_families = assign_attack_groups(group_meta, attack_family_presence)
+    group_meta, rare_train_only_families = assign_attack_groups(
+        group_meta,
+        attack_family_presence,
+        set(ood_holdout_families),
+    )
     group_meta, benign_targets = assign_benign_groups(group_meta)
     print(f"Benign row targets for ID evaluation splits: {benign_targets}", flush=True)
 
     split_map = group_meta.set_index("sequence_group_id")[NEW_SPLIT_COL]
     planning[NEW_SPLIT_COL] = planning["sequence_group_id"].map(split_map)
-    summary = build_split_summary(planning, group_meta, rare_train_only_families)
+    summary = build_split_summary(
+        planning,
+        group_meta,
+        rare_train_only_families,
+        ood_holdout_families,
+    )
 
     print("Planned split summary:", flush=True)
     print(json.dumps(summary, indent=2), flush=True)

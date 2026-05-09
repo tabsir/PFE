@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from tqdm import tqdm
@@ -61,6 +62,7 @@ DEFAULT_UNKNOWN_FAMILY_LOSS_WEIGHT = base_train.DEFAULT_UNKNOWN_FAMILY_LOSS_WEIG
 DEFAULT_OOD_LOSS_WEIGHT = 1.5
 DEFAULT_FAMILY_LOSS_WEIGHT = 1.5
 DEFAULT_FUTURE_LOSS_WEIGHT = 1.2
+DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES = 0.0
 DEFAULT_RECONSTRUCTION_LOSS_WEIGHT = 0.25
 DEFAULT_FAMILY_SAMPLER_POWER = 0.50
 DEFAULT_FUTURE_POSITIVE_BOOST = 2.00
@@ -96,6 +98,9 @@ DEFAULT_OPEN_SET_PSEUDO_ZERO_DAY_FAMILY_COUNT = 2
 DEFAULT_OPEN_SET_ROTATE_PSEUDO_ZERO_DAY_FAMILIES = True
 DEFAULT_OPEN_SET_PSEUDO_ZERO_DAY_ROTATION_SIZE = 1
 DEFAULT_USE_RECONSTRUCTION_HYBRID_OOD = True
+DEFAULT_UNKNOWN_RISK_SCORE_MODE = None
+DEFAULT_OOD_THRESHOLD_SELECTION_POLICY = "target_recall"
+DEFAULT_OOD_MAX_FPR = 0.01
 DEFAULT_RECONSTRUCTION_VALIDATION_MASK_SEED = 1729
 DEFAULT_NOVELTY_SCORE_MODE = "combined_mae_mfm"
 DEFAULT_DECISION_POLICY = "two_stage_current_then_novelty"
@@ -106,6 +111,13 @@ VALIDATION_RANK_VERSION = 2
 DEFAULT_SELECTION_MIN_OOD_RECALL = 0.70
 DEFAULT_SELECTION_MIN_KNOWN_COVERAGE = 0.10
 DEFAULT_SELECTION_MIN_FUTURE_PR_AUC = 0.02
+
+UNKNOWN_RISK_SCORE_MODE_HYBRID = "hybrid_max_raw_unknown_head_and_reconstruction_percentile"
+UNKNOWN_RISK_SCORE_MODE_RAW = "raw_unknown_head_only"
+UNKNOWN_RISK_SCORE_MODE_RECON = "reconstruction_percentile_only"
+
+OOD_THRESHOLD_SELECTION_POLICY_TARGET_RECALL = "target_recall"
+OOD_THRESHOLD_SELECTION_POLICY_MAX_FPR = "max_fpr"
 
 CAT_VOCABS = [256, 256, 256, 65536, 65536, 256, 256, 256, 256]
 PERCENTILE_CANDIDATES = [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]
@@ -216,6 +228,34 @@ def parse_args():
         help="Recall target used to pick the OOD or unknown-warning threshold on validation.",
     )
     parser.add_argument(
+        "--unknown-risk-score-mode",
+        choices=[
+            UNKNOWN_RISK_SCORE_MODE_HYBRID,
+            UNKNOWN_RISK_SCORE_MODE_RAW,
+            UNKNOWN_RISK_SCORE_MODE_RECON,
+        ],
+        default=DEFAULT_UNKNOWN_RISK_SCORE_MODE,
+        help=(
+            "Decision-time score used for unknown-risk alerting. Leave unset to infer it from the model "
+            "capabilities and reconstruction setting."
+        ),
+    )
+    parser.add_argument(
+        "--ood-threshold-selection-policy",
+        choices=[
+            OOD_THRESHOLD_SELECTION_POLICY_TARGET_RECALL,
+            OOD_THRESHOLD_SELECTION_POLICY_MAX_FPR,
+        ],
+        default=DEFAULT_OOD_THRESHOLD_SELECTION_POLICY,
+        help="Policy used to pick the OOD or unknown-warning threshold on validation.",
+    )
+    parser.add_argument(
+        "--ood-max-fpr",
+        type=float,
+        default=DEFAULT_OOD_MAX_FPR,
+        help="Maximum validation false-positive rate allowed when --ood-threshold-selection-policy=max_fpr.",
+    )
+    parser.add_argument(
         "--known-target-unknown-recall",
         type=float,
         default=DEFAULT_KNOWN_TARGET_UNKNOWN_RECALL,
@@ -264,6 +304,15 @@ def parse_args():
         type=int,
         default=None,
         help="Forecasting horizons in minutes used to label and predict future-attack warnings.",
+    )
+    parser.add_argument(
+        "--future-pre-onset-exclusion-gap-minutes",
+        type=float,
+        default=DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES,
+        help=(
+            "Ignore future-task supervision when the first upcoming attack starts less than this many minutes "
+            "after the benign window ends. This changes only the future task."
+        ),
     )
     parser.add_argument(
         "--future-horizon-minutes",
@@ -530,6 +579,22 @@ def normalize_future_thresholds(thresholds, future_horizons_minutes, default_thr
     return {label: value for label, value in zip(labels, threshold_values)}
 
 
+def resolve_unknown_risk_score_mode(requested_mode, use_reconstruction_hybrid_ood, unknown_head_active):
+    if requested_mode is not None:
+        return str(requested_mode)
+    if use_reconstruction_hybrid_ood and unknown_head_active:
+        return UNKNOWN_RISK_SCORE_MODE_HYBRID
+    if use_reconstruction_hybrid_ood:
+        return UNKNOWN_RISK_SCORE_MODE_RECON
+    return UNKNOWN_RISK_SCORE_MODE_RAW
+
+
+def select_ood_threshold(labels, probabilities, selection_policy, target_recall, max_fpr):
+    if selection_policy == OOD_THRESHOLD_SELECTION_POLICY_MAX_FPR:
+        return base_train.select_threshold_for_max_fpr(labels, probabilities, max_fpr)
+    return base_train.select_threshold_for_target_recall(labels, probabilities, target_recall)
+
+
 def aggregate_future_metrics(metrics_by_horizon):
     if not metrics_by_horizon:
         return {
@@ -594,6 +659,39 @@ def summarize_future_metrics_by_horizon(metrics_by_horizon):
             f"f1={format_metric_value(metrics.get('f1', float('nan')), 4)})"
         )
     return "; ".join(parts)
+
+
+def compute_masked_future_loss(future_logits, future_targets, future_supervision_mask, future_loss_fn, fallback_tensor):
+    if future_logits is None or future_loss_fn is None:
+        return fallback_tensor.new_zeros(())
+
+    if future_targets.ndim == 1:
+        future_targets = future_targets.unsqueeze(-1)
+    if future_logits.ndim == 1:
+        future_logits = future_logits.unsqueeze(-1)
+
+    if future_supervision_mask is None:
+        valid_mask = torch.ones_like(future_targets, dtype=torch.bool)
+    else:
+        if future_supervision_mask.ndim == 1:
+            future_supervision_mask = future_supervision_mask.unsqueeze(-1)
+        valid_mask = future_supervision_mask > 0.5
+
+    if not bool(valid_mask.any()):
+        return fallback_tensor.new_zeros(())
+
+    per_element_loss = F.binary_cross_entropy_with_logits(
+        future_logits,
+        future_targets,
+        pos_weight=getattr(future_loss_fn, "pos_weight", None),
+        reduction="none",
+    )
+    masked_loss = per_element_loss[valid_mask]
+    if masked_loss.numel() == 0:
+        return fallback_tensor.new_zeros(())
+    if getattr(future_loss_fn, "reduction", "mean") == "sum":
+        return masked_loss.sum()
+    return masked_loss.mean()
 
 
 def compute_multiclass_macro_f1(targets, predictions):
@@ -743,6 +841,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
         base_dataset,
         future_horizon_minutes=None,
         future_horizons_minutes=None,
+        future_pre_onset_exclusion_gap_minutes=DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES,
         known_attack_to_idx=None,
         min_known_attack_count=100,
         max_sequences=None,
@@ -760,6 +859,8 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
         self.future_horizon_minutes = int(self.future_horizons_minutes[-1])
         self.future_horizon_ms = int(self.future_horizon_minutes * 60 * 1000)
         self.future_horizon_ms_values = np.asarray(self.future_horizons_minutes, dtype=np.int64) * 60_000
+        self.future_pre_onset_exclusion_gap_minutes = max(0.0, float(future_pre_onset_exclusion_gap_minutes))
+        self.future_pre_onset_exclusion_gap_ms = int(round(self.future_pre_onset_exclusion_gap_minutes * 60_000.0))
         self.sequence_ranges = np.asarray(base_dataset.sequence_ranges[:max_sequences], dtype=np.int64)
         self.max_sequences = max_sequences
         self.current_label_rule = current_label_rule
@@ -770,7 +871,8 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
         self.cache_dir = os.path.dirname(base_dataset.sequence_cache_path)
         cache_suffix = (
             f"seq{base_dataset.seq_len}_stride{base_dataset.stride}_"
-            f"h{'-'.join(str(value) for value in self.future_horizons_minutes)}m_{self.current_label_rule}"
+            f"h{'-'.join(str(value) for value in self.future_horizons_minutes)}m_"
+            f"gap{self.future_pre_onset_exclusion_gap_minutes:g}m_{self.current_label_rule}"
         )
         if max_sequences is not None:
             cache_suffix += f"_first{max_sequences}"
@@ -788,6 +890,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
             self.sequence_group_ids,
             self.future_attack_targets,
             self.future_lead_minutes,
+            self.future_supervision_mask,
             self.raw_attack_names,
         ) = self._load_or_build_targets()
 
@@ -799,11 +902,29 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
         if self.future_lead_minutes.ndim == 1:
             self.future_lead_minutes = self.future_lead_minutes.reshape(-1, 1)
 
+        self.future_supervision_mask = np.asarray(self.future_supervision_mask, dtype=np.int8)
+        if self.future_supervision_mask.ndim == 1:
+            self.future_supervision_mask = self.future_supervision_mask.reshape(-1, 1)
+
+        self.future_effective_targets = np.logical_and(
+            self.future_attack_targets == 1,
+            self.future_supervision_mask == 1,
+        ).astype(np.int8)
+
         if len(self.sequence_ranges):
-            self.future_attack_any_targets = self.future_attack_targets.max(axis=1).astype(np.int8)
-            self.future_lead_minutes_any = self.future_lead_minutes[:, -1].astype(np.float32)
+            self.future_attack_any_targets = self.future_effective_targets.max(axis=1).astype(np.int8)
+            self.future_supervision_any_mask = self.future_supervision_mask.any(axis=1).astype(np.int8)
+            masked_future_leads = np.where(self.future_effective_targets == 1, self.future_lead_minutes, np.nan)
+            self.future_lead_minutes_any = np.full(len(self.sequence_ranges), -1.0, dtype=np.float32)
+            valid_future_any = np.asarray(self.future_attack_any_targets == 1, dtype=bool)
+            if valid_future_any.any():
+                self.future_lead_minutes_any[valid_future_any] = np.nanmax(
+                    masked_future_leads[valid_future_any],
+                    axis=1,
+                ).astype(np.float32)
         else:
             self.future_attack_any_targets = np.zeros(0, dtype=np.int8)
+            self.future_supervision_any_mask = np.zeros(0, dtype=np.int8)
             self.future_lead_minutes_any = np.zeros(0, dtype=np.float32)
 
         if known_attack_to_idx is None:
@@ -827,6 +948,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
             "future_attack_any": torch.tensor(self.future_attack_any_targets[idx], dtype=torch.float32),
             "future_lead_minutes": torch.tensor(self.future_lead_minutes[idx], dtype=torch.float32),
             "future_lead_minutes_any": torch.tensor(self.future_lead_minutes_any[idx], dtype=torch.float32),
+            "future_supervision_mask": torch.tensor(self.future_supervision_mask[idx], dtype=torch.float32),
             "unknown_attack_target": torch.tensor(self.unknown_attack_targets[idx], dtype=torch.float32),
         })
         return item
@@ -836,9 +958,10 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
         num_horizons = len(self.future_horizons_minutes)
         future_attack_targets = np.zeros((num_sequences, num_horizons), dtype=np.int8)
         future_lead_minutes = np.full((num_sequences, num_horizons), -1.0, dtype=np.float32)
+        future_supervision_mask = np.ones((num_sequences, num_horizons), dtype=np.int8)
 
         if num_sequences == 0:
-            return future_attack_targets, future_lead_minutes
+            return future_attack_targets, future_lead_minutes, future_supervision_mask
 
         group_change_indices = np.flatnonzero(sequence_group_ids[1:] != sequence_group_ids[:-1]) + 1
         group_starts = np.concatenate([[0], group_change_indices])
@@ -870,7 +993,10 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
                 future_attack_targets[group_start + local_idx, horizon_hits] = 1
                 future_lead_minutes[group_start + local_idx, horizon_hits] = float(lead_ms / 60_000.0)
 
-        return future_attack_targets, future_lead_minutes
+                if self.future_pre_onset_exclusion_gap_ms > 0 and lead_ms < self.future_pre_onset_exclusion_gap_ms:
+                    future_supervision_mask[group_start + local_idx, horizon_hits] = 0
+
+        return future_attack_targets, future_lead_minutes, future_supervision_mask
 
     def _load_or_build_targets(self):
         if (not self.rebuild_target_cache and os.path.exists(self.target_cache_path)
@@ -882,10 +1008,17 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
             raw_attack_names = target_meta["raw_attack_names"]
             future_attack_targets = cached["future_attack_targets"]
             future_lead_minutes = cached["future_lead_minutes"]
+            future_supervision_mask = (
+                cached["future_supervision_mask"]
+                if "future_supervision_mask" in cached
+                else np.ones_like(future_attack_targets, dtype=np.int8)
+            )
             if future_attack_targets.ndim == 1:
                 future_attack_targets = future_attack_targets.reshape(-1, 1)
             if future_lead_minutes.ndim == 1:
                 future_lead_minutes = future_lead_minutes.reshape(-1, 1)
+            if future_supervision_mask.ndim == 1:
+                future_supervision_mask = future_supervision_mask.reshape(-1, 1)
             return (
                 cached["sequence_current_labels"],
                 cached["sequence_attack_ids"],
@@ -894,6 +1027,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
                 cached["sequence_group_ids"],
                 future_attack_targets,
                 future_lead_minutes,
+                future_supervision_mask,
                 raw_attack_names,
             )
 
@@ -937,7 +1071,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
                 last_attack_offset = int(attack_offsets[-1])
                 sequence_attack_ids[idx] = row_attack_ids[start_idx + last_attack_offset]
 
-        future_attack_targets, future_lead_minutes = self._build_future_targets(
+        future_attack_targets, future_lead_minutes, future_supervision_mask = self._build_future_targets(
             sequence_current_labels,
             sequence_start_times,
             sequence_end_times,
@@ -953,6 +1087,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
             sequence_group_ids=sequence_group_ids,
             future_attack_targets=future_attack_targets,
             future_lead_minutes=future_lead_minutes,
+            future_supervision_mask=future_supervision_mask,
         )
         with open(self.target_meta_path, "w") as handle:
             json.dump(
@@ -960,6 +1095,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
                     "raw_attack_names": raw_attack_names,
                     "current_label_rule": self.current_label_rule,
                     "future_horizons_minutes": self.future_horizons_minutes,
+                    "future_pre_onset_exclusion_gap_minutes": self.future_pre_onset_exclusion_gap_minutes,
                 },
                 handle,
                 indent=2,
@@ -975,6 +1111,7 @@ class VariantDownstreamNIDSDataset(base_train.DownstreamNIDSDataset):
             sequence_group_ids,
             future_attack_targets,
             future_lead_minutes,
+            future_supervision_mask,
             raw_attack_names,
         )
 
@@ -1075,7 +1212,8 @@ def build_family_balanced_sample_weights(
                 balanced_weights[idx] *= family_factors.get(attack_family, 1.0)
 
     benign_mask = np.asarray(dataset.sequence_current_labels == 0, dtype=bool)
-    future_positive_mask = benign_mask & np.asarray(dataset.future_attack_any_targets == 1, dtype=bool)
+    valid_future_benign_mask = benign_mask & np.asarray(dataset.future_supervision_any_mask == 1, dtype=bool)
+    future_positive_mask = valid_future_benign_mask & np.asarray(dataset.future_attack_any_targets == 1, dtype=bool)
     if future_positive_boost != 1.0 and future_positive_mask.any():
         balanced_weights[future_positive_mask] *= float(future_positive_boost)
 
@@ -1087,8 +1225,12 @@ def build_family_balanced_sample_weights(
     effective_positive_rate = float(
         balanced_weights[positive_mask].sum() / max(balanced_weights.sum(), 1e-12)
     )
-    benign_weight_total = float(balanced_weights[benign_mask].sum()) if benign_mask.any() else 0.0
-    observed_future_positive_rate = float(dataset.future_attack_any_targets[benign_mask].mean()) if benign_mask.any() else 0.0
+    benign_weight_total = float(balanced_weights[valid_future_benign_mask].sum()) if valid_future_benign_mask.any() else 0.0
+    observed_future_positive_rate = (
+        float(dataset.future_attack_any_targets[valid_future_benign_mask].mean())
+        if valid_future_benign_mask.any()
+        else 0.0
+    )
     effective_future_positive_rate = (
         float(balanced_weights[future_positive_mask].sum() / max(benign_weight_total, 1e-12))
         if benign_weight_total > 0.0
@@ -1096,6 +1238,7 @@ def build_family_balanced_sample_weights(
     )
     sampler_stats = {
         "future_positive_count": int(future_positive_mask.sum()),
+        "future_ignored_near_onset_count": int(benign_mask.sum() - valid_future_benign_mask.sum()),
         "observed_future_positive_rate": observed_future_positive_rate,
         "effective_future_positive_rate": effective_future_positive_rate,
     }
@@ -1111,16 +1254,23 @@ def build_family_balanced_sample_weights(
 def build_future_pos_weight_tensor(dataset, device):
     benign_mask = dataset.sequence_current_labels == 0
     future_targets = np.asarray(dataset.future_attack_targets[benign_mask], dtype=np.int64)
+    future_supervision_mask = np.asarray(dataset.future_supervision_mask[benign_mask], dtype=np.int8)
     if future_targets.ndim == 1:
         future_targets = future_targets.reshape(-1, 1)
+    if future_supervision_mask.ndim == 1:
+        future_supervision_mask = future_supervision_mask.reshape(-1, 1)
 
     if future_targets.size == 0:
         pos_weights = np.ones(len(dataset.future_horizons_minutes), dtype=np.float32)
     else:
-        pos_weights = np.asarray(
-            [base_train.build_pos_weight(future_targets[:, horizon_idx]) for horizon_idx in range(future_targets.shape[1])],
-            dtype=np.float32,
-        )
+        pos_weight_values = []
+        for horizon_idx in range(future_targets.shape[1]):
+            horizon_valid_mask = future_supervision_mask[:, horizon_idx] == 1
+            if not horizon_valid_mask.any():
+                pos_weight_values.append(1.0)
+                continue
+            pos_weight_values.append(base_train.build_pos_weight(future_targets[horizon_valid_mask, horizon_idx]))
+        pos_weights = np.asarray(pos_weight_values, dtype=np.float32)
     return torch.tensor(pos_weights, dtype=torch.float32, device=device)
 
 
@@ -1131,7 +1281,10 @@ def build_future_refinement_loader(
     device,
     target_positive_rate,
 ):
-    benign_indices = np.flatnonzero(dataset.sequence_current_labels == 0)
+    benign_indices = np.flatnonzero(
+        (dataset.sequence_current_labels == 0)
+        & (np.asarray(dataset.future_supervision_any_mask == 1, dtype=bool))
+    )
     if benign_indices.size == 0:
         return None, 0, 0, 0.0, 0.0
 
@@ -1328,8 +1481,11 @@ def run_future_refinement_stage(
             cont = batch["continuous"].to(device, non_blocking=True)
             cat = batch["categorical"].to(device, non_blocking=True)
             future_targets = batch["future_attack"].float().to(device, non_blocking=True)
+            future_supervision_mask = batch["future_supervision_mask"].float().to(device, non_blocking=True)
             if future_targets.ndim == 1:
                 future_targets = future_targets.unsqueeze(-1)
+            if future_supervision_mask.ndim == 1:
+                future_supervision_mask = future_supervision_mask.unsqueeze(-1)
 
             outputs = model(
                 cont,
@@ -1345,7 +1501,13 @@ def run_future_refinement_stage(
             if future_logits is None:
                 continue
 
-            future_loss = future_loss_fn(future_logits, future_targets)
+            future_loss = compute_masked_future_loss(
+                future_logits,
+                future_targets,
+                future_supervision_mask,
+                future_loss_fn,
+                outputs["current_attack_logits"],
+            )
 
             optimizer.zero_grad()
             future_loss.backward()
@@ -1834,6 +1996,7 @@ def select_known_threshold(
 
     candidates = build_confidence_candidates(known_confidences, unknown_confidences)
     selected = None
+    usable_fallback = None
     fallback = None
 
     for threshold_value in np.sort(candidates):
@@ -1901,7 +2064,30 @@ def select_known_threshold(
             if fallback_key > current_fallback_key:
                 fallback = record
 
-        if not record["meets_target_unknown_recall"]:
+        if known_gate.any():
+            usable_fallback_key = (
+                record["unknown_recall"],
+                record["balanced_score"],
+                record["accepted_macro_f1"],
+                record["accepted_accuracy"],
+                record["known_coverage"],
+                -record["threshold"],
+            )
+            if usable_fallback is None:
+                usable_fallback = record
+            else:
+                current_usable_fallback_key = (
+                    usable_fallback["unknown_recall"],
+                    usable_fallback["balanced_score"],
+                    usable_fallback.get("accepted_macro_f1", 0.0),
+                    usable_fallback["accepted_accuracy"],
+                    usable_fallback["known_coverage"],
+                    -usable_fallback["threshold"],
+                )
+                if usable_fallback_key > current_usable_fallback_key:
+                    usable_fallback = record
+
+        if not record["meets_target_unknown_recall"] or not known_gate.any():
             continue
 
         selected_key = (
@@ -1924,7 +2110,13 @@ def select_known_threshold(
             if selected_key > current_selected_key:
                 selected = record
 
-    return selected or fallback
+    if selected is not None:
+        return selected
+    if usable_fallback is not None:
+        usable_fallback = dict(usable_fallback)
+        usable_fallback["selection_policy"] = "best_effort_nonzero_known_coverage"
+        return usable_fallback
+    return fallback
 
 
 def compute_multitask_losses_v3(
@@ -1939,8 +2131,11 @@ def compute_multitask_losses_v3(
 ):
     current_targets = batch["label"].float()
     future_targets = batch["future_attack"].float()
+    future_supervision_mask = batch.get("future_supervision_mask")
     if future_targets.ndim == 1:
         future_targets = future_targets.unsqueeze(-1)
+    if future_supervision_mask is not None and future_supervision_mask.ndim == 1:
+        future_supervision_mask = future_supervision_mask.unsqueeze(-1)
     known_attack_targets = batch["known_attack_id"]
     unknown_attack_targets = batch["unknown_attack_target"].float()
 
@@ -1951,7 +2146,13 @@ def compute_multitask_losses_v3(
     if future_logits is not None and future_logits.ndim == 1:
         future_logits = future_logits.unsqueeze(-1)
     if future_logits is not None and future_loss_fn is not None and future_mask.any():
-        future_loss = future_loss_fn(future_logits[future_mask], future_targets[future_mask])
+        future_loss = compute_masked_future_loss(
+            future_logits[future_mask],
+            future_targets[future_mask],
+            future_supervision_mask[future_mask] if future_supervision_mask is not None else None,
+            future_loss_fn,
+            outputs["current_attack_logits"],
+        )
     else:
         future_loss = outputs["current_attack_logits"].new_zeros(())
 
@@ -2030,6 +2231,7 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
     future_probs = []
     future_targets = []
     future_leads = []
+    future_supervision_masks = []
     raw_ood_probs = []
     ood_targets = []
     reconstruction_scores = []
@@ -2088,6 +2290,17 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
             getattr(model, "unknown_attack_head", None) is not None,
         )
     )
+    unknown_risk_score_mode = str(
+        getattr(
+            evaluate_downstream_v3,
+            "unknown_risk_score_mode",
+            resolve_unknown_risk_score_mode(
+                None,
+                use_reconstruction_hybrid_ood,
+                unknown_head_active,
+            ),
+        )
+    )
     novelty_score_mode = str(
         getattr(
             evaluate_downstream_v3,
@@ -2121,6 +2334,9 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
             future_lead = batch["future_lead_minutes"].to(device, non_blocking=True)
             if future_lead.ndim == 1:
                 future_lead = future_lead.unsqueeze(-1)
+            future_supervision_mask = batch["future_supervision_mask"].to(device, non_blocking=True)
+            if future_supervision_mask.ndim == 1:
+                future_supervision_mask = future_supervision_mask.unsqueeze(-1)
 
             reconstruction_mask = None
             reconstruction_mfm_mask = None
@@ -2164,6 +2380,7 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
                     "continuous": cont,
                     "label": current_target,
                     "future_attack": future_target,
+                    "future_supervision_mask": future_supervision_mask,
                     "known_attack_id": known_attack_target,
                     "unknown_attack_target": unknown_target,
                 },
@@ -2214,6 +2431,7 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
                 future_probs.append(future_probability)
                 future_targets.append(future_target[benign_mask].cpu().numpy())
                 future_leads.append(future_lead[benign_mask].cpu().numpy())
+                future_supervision_masks.append(future_supervision_mask[benign_mask].cpu().numpy())
 
             if outputs["attack_family_logits"] is not None:
                 family_head_enabled = True
@@ -2285,10 +2503,10 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         reconstruction_score_values,
         reconstruction_calibration,
     )
-    ood_probabilities = (
-        stt_architecture.combine_unknown_scores(raw_ood_probabilities, reconstruction_probabilities)
-        if use_reconstruction_hybrid_ood
-        else raw_ood_probabilities
+    ood_probabilities = stt_architecture.resolve_unknown_risk_probabilities(
+        raw_ood_probabilities,
+        reconstruction_probabilities,
+        unknown_risk_score_mode,
     )
     ood_metrics = base_train.compute_binary_metrics(
         ood_labels,
@@ -2301,10 +2519,22 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         "ood_threshold_target_recall",
         DEFAULT_OOD_THRESHOLD_TARGET_RECALL,
     )
-    ood_selection = base_train.select_threshold_for_target_recall(
+    ood_threshold_selection_policy = getattr(
+        evaluate_downstream_v3,
+        "ood_threshold_selection_policy",
+        DEFAULT_OOD_THRESHOLD_SELECTION_POLICY,
+    )
+    ood_max_fpr = getattr(
+        evaluate_downstream_v3,
+        "ood_max_fpr",
+        DEFAULT_OOD_MAX_FPR,
+    )
+    ood_selection = select_ood_threshold(
         ood_labels,
         ood_probabilities,
+        ood_threshold_selection_policy,
         ood_threshold_target_recall,
+        ood_max_fpr,
     )
     best_ood_metrics = base_train.compute_binary_metrics(
         ood_labels,
@@ -2318,10 +2548,12 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         raw_ood_probabilities,
         thresholds["ood"],
     )
-    ood_head_selection = base_train.select_threshold_for_target_recall(
+    ood_head_selection = select_ood_threshold(
         ood_labels,
         raw_ood_probabilities,
+        ood_threshold_selection_policy,
         ood_threshold_target_recall,
+        ood_max_fpr,
     )
     best_ood_head_metrics = base_train.compute_binary_metrics(
         ood_labels,
@@ -2335,10 +2567,12 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         reconstruction_probabilities,
         thresholds["ood"],
     )
-    reconstruction_unknown_selection = base_train.select_threshold_for_target_recall(
+    reconstruction_unknown_selection = select_ood_threshold(
         ood_labels,
         reconstruction_probabilities,
+        ood_threshold_selection_policy,
         ood_threshold_target_recall,
+        ood_max_fpr,
     )
     best_reconstruction_unknown_metrics = base_train.compute_binary_metrics(
         ood_labels,
@@ -2359,6 +2593,10 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         np.concatenate(future_leads, axis=0)
         if future_leads else np.zeros((0, len(future_horizons_minutes)), dtype=np.float32)
     )
+    future_supervision_values = (
+        np.concatenate(future_supervision_masks, axis=0)
+        if future_supervision_masks else np.zeros((0, len(future_horizons_minutes)), dtype=np.float32)
+    )
 
     future_threshold_target_recall = getattr(
         evaluate_downstream_v3,
@@ -2372,33 +2610,62 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         horizon_labels = future_labels[:, horizon_idx] if future_labels.size else np.array([])
         horizon_probs = future_probabilities[:, horizon_idx] if future_probabilities.size else np.array([])
         horizon_leads = future_lead_values[:, horizon_idx] if future_lead_values.size else np.array([])
+        horizon_supervision_mask = (
+            future_supervision_values[:, horizon_idx].astype(bool)
+            if future_supervision_values.size
+            else np.zeros(0, dtype=bool)
+        )
+        filtered_horizon_labels = horizon_labels[horizon_supervision_mask] if horizon_supervision_mask.size else np.array([])
+        filtered_horizon_probs = horizon_probs[horizon_supervision_mask] if horizon_supervision_mask.size else np.array([])
+        filtered_horizon_leads = horizon_leads[horizon_supervision_mask] if horizon_supervision_mask.size else np.array([])
         horizon_threshold = future_thresholds[horizon_label]
 
         future_metrics_by_horizon[horizon_label] = base_train.compute_binary_metrics(
-            horizon_labels,
-            horizon_probs,
+            filtered_horizon_labels,
+            filtered_horizon_probs,
             horizon_threshold,
         )
         horizon_selection = base_train.select_threshold_for_target_recall(
-            horizon_labels,
-            horizon_probs,
+            filtered_horizon_labels,
+            filtered_horizon_probs,
             future_threshold_target_recall,
         )
         horizon_best_metrics = base_train.compute_binary_metrics(
-            horizon_labels,
-            horizon_probs,
+            filtered_horizon_labels,
+            filtered_horizon_probs,
             horizon_selection["threshold"],
         )
         horizon_best_metrics.update(horizon_selection)
+        raw_positive_count = int(np.sum(np.asarray(horizon_labels) == 1)) if np.asarray(horizon_labels).size else 0
+        valid_positive_count = int(np.sum(np.asarray(filtered_horizon_labels) == 1)) if np.asarray(filtered_horizon_labels).size else 0
+        ignored_near_onset_positive_count = max(raw_positive_count - valid_positive_count, 0)
+        future_metrics_by_horizon[horizon_label].update({
+            "valid_count": int(filtered_horizon_labels.shape[0]),
+            "raw_positive_count": raw_positive_count,
+            "valid_positive_count": valid_positive_count,
+            "ignored_near_onset_positive_count": ignored_near_onset_positive_count,
+            "future_pre_onset_exclusion_gap_minutes": float(
+                getattr(evaluate_downstream_v3, "future_pre_onset_exclusion_gap_minutes", 0.0)
+            ),
+        })
+        horizon_best_metrics.update({
+            "valid_count": int(filtered_horizon_labels.shape[0]),
+            "raw_positive_count": raw_positive_count,
+            "valid_positive_count": valid_positive_count,
+            "ignored_near_onset_positive_count": ignored_near_onset_positive_count,
+            "future_pre_onset_exclusion_gap_minutes": float(
+                getattr(evaluate_downstream_v3, "future_pre_onset_exclusion_gap_minutes", 0.0)
+            ),
+        })
         best_future_by_horizon[horizon_label] = horizon_best_metrics
 
         horizon_hits = (
-            (np.asarray(horizon_probs) >= horizon_best_metrics["threshold"])
-            & (np.asarray(horizon_labels) == 1)
+            (np.asarray(filtered_horizon_probs) >= horizon_best_metrics["threshold"])
+            & (np.asarray(filtered_horizon_labels) == 1)
         )
         mean_future_lead_by_horizon[horizon_label] = (
-            float(np.asarray(horizon_leads)[horizon_hits].mean())
-            if np.asarray(horizon_leads).size and horizon_hits.any()
+            float(np.asarray(filtered_horizon_leads)[horizon_hits].mean())
+            if np.asarray(filtered_horizon_leads).size and horizon_hits.any()
             else float("nan")
         )
 
@@ -2525,24 +2792,10 @@ def evaluate_downstream_v3(model, data_loader, device, thresholds):
         "reconstruction_score_mean": float(np.asarray(reconstruction_score_values).mean()) if np.asarray(reconstruction_score_values).size else 0.0,
         "mae_reconstruction_score_mean": float(np.asarray(mae_reconstruction_score_values).mean()) if np.asarray(mae_reconstruction_score_values).size else 0.0,
         "mfm_reconstruction_score_mean": float(np.asarray(mfm_reconstruction_score_values).mean()) if np.asarray(mfm_reconstruction_score_values).size else 0.0,
-        "ood_score_mode": (
-            "hybrid_max_raw_unknown_head_and_reconstruction_percentile"
-            if use_reconstruction_hybrid_ood and unknown_head_active
-            else "reconstruction_percentile_only"
-            if use_reconstruction_hybrid_ood
-            else "raw_unknown_head_only"
-            if unknown_head_active
-            else "disabled"
-        ),
-        "unknown_risk_score_mode": (
-            "hybrid_max_raw_unknown_head_and_reconstruction_percentile"
-            if use_reconstruction_hybrid_ood and unknown_head_active
-            else "reconstruction_percentile_only"
-            if use_reconstruction_hybrid_ood
-            else "raw_unknown_head_only"
-            if unknown_head_active
-            else "disabled"
-        ),
+        "ood_score_mode": unknown_risk_score_mode if (use_reconstruction_hybrid_ood or unknown_head_active) else "disabled",
+        "unknown_risk_score_mode": unknown_risk_score_mode if (use_reconstruction_hybrid_ood or unknown_head_active) else "disabled",
+        "ood_threshold_selection_policy": str(ood_threshold_selection_policy),
+        "ood_max_fpr": float(ood_max_fpr),
         "future": future_metrics,
         "best_future": best_future_metrics,
         "future_by_horizon": future_metrics_by_horizon,
@@ -2897,6 +3150,9 @@ def build_run_manifest_payload(
     thresholds,
     loss_weights,
     known_attack_labels,
+    unknown_risk_score_mode,
+    ood_threshold_selection_policy,
+    ood_max_fpr,
     validation_metrics=None,
 ):
     manifest_payload = {
@@ -2914,6 +3170,9 @@ def build_run_manifest_payload(
         "thresholds": thresholds,
         "loss_weights": loss_weights,
         "known_attack_labels": list(known_attack_labels),
+        "unknown_risk_score_mode": str(unknown_risk_score_mode),
+        "ood_threshold_selection_policy": str(ood_threshold_selection_policy),
+        "ood_max_fpr": float(ood_max_fpr),
     }
     if validation_metrics is not None:
         manifest_payload["validation_summary"] = {
@@ -2959,6 +3218,7 @@ def build_training_checkpoint_payload(
     pseudo_zero_day_rotation_size,
     future_horizon_minutes,
     future_horizons_minutes,
+    future_pre_onset_exclusion_gap_minutes=DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES,
     future_task_enabled,
     seq_len,
     stride,
@@ -2985,7 +3245,10 @@ def build_training_checkpoint_payload(
     unknown_head_policy,
     task_activation,
     use_reconstruction_hybrid_ood,
+    unknown_risk_score_mode,
     unknown_head_active,
+    ood_threshold_selection_policy,
+    ood_max_fpr,
     reconstruction_train_mae_mask_ratio,
     reconstruction_train_mfm_mask_ratio,
     reconstruction_validation_mae_mask_ratio,
@@ -3014,6 +3277,7 @@ def build_training_checkpoint_payload(
         "pseudo_zero_day_rotation_size": pseudo_zero_day_rotation_size,
         "future_horizon_minutes": future_horizon_minutes,
         "future_horizons_minutes": future_horizons_minutes,
+        "future_pre_onset_exclusion_gap_minutes": float(future_pre_onset_exclusion_gap_minutes),
         "future_task_enabled": future_task_enabled,
         "seq_len": seq_len,
         "stride": stride,
@@ -3040,6 +3304,7 @@ def build_training_checkpoint_payload(
         "unknown_head_policy": unknown_head_policy,
         "task_activation": task_activation,
         "use_reconstruction_hybrid_ood": use_reconstruction_hybrid_ood,
+        "unknown_risk_score_mode": str(unknown_risk_score_mode),
         "reconstruction_train_mae_mask_ratio": reconstruction_train_mae_mask_ratio,
         "reconstruction_train_mfm_mask_ratio": reconstruction_train_mfm_mask_ratio,
         "reconstruction_validation_mae_mask_ratio": reconstruction_validation_mae_mask_ratio,
@@ -3050,6 +3315,8 @@ def build_training_checkpoint_payload(
         "use_ood_head": bool(unknown_head_active),
         "unknown_head_active": bool(unknown_head_active),
         "validation_rank_version": VALIDATION_RANK_VERSION,
+        "ood_threshold_selection_policy": str(ood_threshold_selection_policy),
+        "ood_max_fpr": float(ood_max_fpr),
     }
 
     if validation_score is not None:
@@ -3114,7 +3381,10 @@ def train_multitask_nids_v3():
     train_target_positive_rate = args.train_target_positive_rate
     threshold_target_recall = args.threshold_target_recall
     future_threshold_target_recall = args.future_threshold_target_recall
+    future_pre_onset_exclusion_gap_minutes = float(args.future_pre_onset_exclusion_gap_minutes)
     ood_threshold_target_recall = args.ood_threshold_target_recall
+    ood_threshold_selection_policy = str(args.ood_threshold_selection_policy)
+    ood_max_fpr = float(args.ood_max_fpr)
     known_target_unknown_recall = args.known_target_unknown_recall
     unknown_family_loss_weight = args.unknown_family_loss_weight
     ood_loss_weight = args.ood_loss_weight
@@ -3155,10 +3425,26 @@ def train_multitask_nids_v3():
         raise ValueError(
             f"future_threshold_target_recall must be in (0, 1], got {future_threshold_target_recall}"
         )
+    if future_pre_onset_exclusion_gap_minutes < 0.0:
+        raise ValueError(
+            "future_pre_onset_exclusion_gap_minutes must be >= 0, got "
+            f"{future_pre_onset_exclusion_gap_minutes}"
+        )
     if not 0.0 < ood_threshold_target_recall <= 1.0:
         raise ValueError(
             f"ood_threshold_target_recall must be in (0, 1], got {ood_threshold_target_recall}"
         )
+    if ood_threshold_selection_policy not in {
+        OOD_THRESHOLD_SELECTION_POLICY_TARGET_RECALL,
+        OOD_THRESHOLD_SELECTION_POLICY_MAX_FPR,
+    }:
+        raise ValueError(
+            "ood_threshold_selection_policy must be one of "
+            f"{OOD_THRESHOLD_SELECTION_POLICY_TARGET_RECALL!r} or {OOD_THRESHOLD_SELECTION_POLICY_MAX_FPR!r}, "
+            f"got {ood_threshold_selection_policy}"
+        )
+    if not 0.0 <= ood_max_fpr <= 1.0:
+        raise ValueError(f"ood_max_fpr must be in [0, 1], got {ood_max_fpr}")
     if not 0.0 <= known_target_unknown_recall <= 1.0:
         raise ValueError(
             f"known_target_unknown_recall must be in [0, 1], got {known_target_unknown_recall}"
@@ -3258,10 +3544,13 @@ def train_multitask_nids_v3():
         "future_task_enabled": future_task_enabled,
         "future_horizons_minutes": future_horizons_minutes,
         "future_horizon_minutes": future_horizon_minutes,
+        "future_pre_onset_exclusion_gap_minutes": future_pre_onset_exclusion_gap_minutes,
         "train_target_positive_rate": train_target_positive_rate,
         "threshold_target_recall": threshold_target_recall,
         "future_threshold_target_recall": future_threshold_target_recall,
         "ood_threshold_target_recall": ood_threshold_target_recall,
+        "ood_threshold_selection_policy": ood_threshold_selection_policy,
+        "ood_max_fpr": ood_max_fpr,
         "known_target_unknown_recall": known_target_unknown_recall,
         "unknown_family_loss_weight": unknown_family_loss_weight,
         "ood_loss_weight": ood_loss_weight,
@@ -3291,12 +3580,18 @@ def train_multitask_nids_v3():
     print(f"Thesis claim policy: {thesis_claim}", flush=True)
     print(f"Future task enabled: {future_task_enabled}", flush=True)
     print(f"Future horizons minutes: {future_horizons_minutes}", flush=True)
+    print(
+        f"Future pre-onset exclusion gap minutes: {future_pre_onset_exclusion_gap_minutes:.3f}",
+        flush=True,
+    )
     print(f"Window config: seq_len={seq_len}, stride={stride}", flush=True)
     print(f"Current label rule: {current_label_rule}", flush=True)
     print(f"Train target positive rate: {train_target_positive_rate:.3f}", flush=True)
     print(f"Current threshold target recall: {threshold_target_recall:.3f}", flush=True)
     print(f"Future threshold target recall: {future_threshold_target_recall:.3f}", flush=True)
     print(f"OOD threshold target recall: {ood_threshold_target_recall:.3f}", flush=True)
+    print(f"OOD threshold selection policy: {ood_threshold_selection_policy}", flush=True)
+    print(f"OOD max FPR: {ood_max_fpr:.4f}", flush=True)
     print(f"Known target unknown recall: {known_target_unknown_recall:.3f}", flush=True)
     print(f"OOD loss weight: {ood_loss_weight:.3f}", flush=True)
     print(f"Family loss weight: {family_loss_weight:.3f}", flush=True)
@@ -3364,6 +3659,7 @@ def train_multitask_nids_v3():
     train_probe_dataset = VariantDownstreamNIDSDataset(
         train_base_dataset,
         future_horizons_minutes=future_horizons_minutes,
+        future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
         known_attack_to_idx={},
         current_label_rule=current_label_rule,
         rebuild_target_cache=rebuild_caches,
@@ -3372,6 +3668,7 @@ def train_multitask_nids_v3():
     valid_probe_dataset = VariantDownstreamNIDSDataset(
         valid_base_dataset,
         future_horizons_minutes=future_horizons_minutes,
+        future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
         known_attack_to_idx={},
         current_label_rule=current_label_rule,
         rebuild_target_cache=rebuild_caches,
@@ -3392,6 +3689,7 @@ def train_multitask_nids_v3():
     train_dataset = VariantDownstreamNIDSDataset(
         train_base_dataset,
         future_horizons_minutes=future_horizons_minutes,
+        future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
         min_known_attack_count=min_known_attack_count,
         current_label_rule=current_label_rule,
         rebuild_target_cache=rebuild_caches,
@@ -3406,6 +3704,7 @@ def train_multitask_nids_v3():
     valid_dataset = VariantDownstreamNIDSDataset(
         valid_base_dataset,
         future_horizons_minutes=future_horizons_minutes,
+        future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
         known_attack_to_idx=train_dataset.known_attack_to_idx,
         current_label_rule=current_label_rule,
         rebuild_target_cache=rebuild_caches,
@@ -3428,6 +3727,12 @@ def train_multitask_nids_v3():
             and bool(rotation_family_pool)
         )
     )
+    unknown_risk_score_mode = resolve_unknown_risk_score_mode(
+        args.unknown_risk_score_mode,
+        use_reconstruction_hybrid_ood,
+        unknown_head_active,
+    )
+    base_expected_config["unknown_risk_score_mode"] = unknown_risk_score_mode
     task_activation = build_task_activation_metadata(
         future_task_enabled=future_task_enabled,
         family_head_enabled=bool(train_dataset.known_attack_names),
@@ -3436,6 +3741,7 @@ def train_multitask_nids_v3():
         reconstruction_loss_weight=reconstruction_loss_weight,
     )
     print(f"Task activation: {task_activation}", flush=True)
+    print(f"Unknown-risk score mode: {unknown_risk_score_mode}", flush=True)
     if not unknown_head_active:
         print(
             "Unknown head disabled for this run because the training split contains no unknown-labelled windows.",
@@ -3479,6 +3785,9 @@ def train_multitask_nids_v3():
             thresholds=thresholds,
             loss_weights=loss_weights,
             known_attack_labels=train_dataset.known_attack_names,
+            unknown_risk_score_mode=unknown_risk_score_mode,
+            ood_threshold_selection_policy=ood_threshold_selection_policy,
+            ood_max_fpr=ood_max_fpr,
         ),
     )
 
@@ -3561,10 +3870,14 @@ def train_multitask_nids_v3():
     evaluate_downstream_v3.loss_weights = loss_weights
     evaluate_downstream_v3.threshold_target_recall = threshold_target_recall
     evaluate_downstream_v3.future_threshold_target_recall = future_threshold_target_recall
+    evaluate_downstream_v3.future_pre_onset_exclusion_gap_minutes = future_pre_onset_exclusion_gap_minutes
     evaluate_downstream_v3.ood_threshold_target_recall = ood_threshold_target_recall
+    evaluate_downstream_v3.ood_threshold_selection_policy = ood_threshold_selection_policy
+    evaluate_downstream_v3.ood_max_fpr = ood_max_fpr
     evaluate_downstream_v3.known_target_unknown_recall = known_target_unknown_recall
     evaluate_downstream_v3.future_horizons_minutes = future_horizons_minutes
     evaluate_downstream_v3.use_reconstruction_hybrid_ood = use_reconstruction_hybrid_ood
+    evaluate_downstream_v3.unknown_risk_score_mode = unknown_risk_score_mode
     evaluate_downstream_v3.unknown_head_active = unknown_head_active
     evaluate_downstream_v3.novelty_score_mode = novelty_score_mode
     evaluate_downstream_v3.decision_policy = decision_policy
@@ -3651,6 +3964,8 @@ def train_multitask_nids_v3():
             ("threshold_target_recall", threshold_target_recall),
             ("future_threshold_target_recall", future_threshold_target_recall),
             ("ood_threshold_target_recall", ood_threshold_target_recall),
+            ("ood_threshold_selection_policy", ood_threshold_selection_policy),
+            ("ood_max_fpr", ood_max_fpr),
             ("known_target_unknown_recall", known_target_unknown_recall),
             ("unknown_family_loss_weight", unknown_family_loss_weight),
             ("ood_loss_weight", ood_loss_weight),
@@ -3664,6 +3979,7 @@ def train_multitask_nids_v3():
             ("unknown_head_policy", unknown_head_policy),
             ("thesis_claim", thesis_claim),
             ("use_reconstruction_hybrid_ood", use_reconstruction_hybrid_ood),
+            ("unknown_risk_score_mode", unknown_risk_score_mode),
             ("unknown_head_active", unknown_head_active),
             ("rotate_pseudo_zero_day_families", rotate_pseudo_zero_day_families),
             ("pseudo_zero_day_rotation_size", pseudo_zero_day_rotation_size),
@@ -3765,6 +4081,9 @@ def train_multitask_nids_v3():
             thresholds=thresholds,
             loss_weights=loss_weights,
             known_attack_labels=train_dataset.known_attack_names,
+            unknown_risk_score_mode=unknown_risk_score_mode,
+            ood_threshold_selection_policy=ood_threshold_selection_policy,
+            ood_max_fpr=ood_max_fpr,
             validation_metrics=current_validation_metrics,
         )
 
@@ -3796,6 +4115,7 @@ def train_multitask_nids_v3():
             pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
             future_horizon_minutes=future_horizon_minutes,
             future_horizons_minutes=future_horizons_minutes,
+            future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
             future_task_enabled=future_task_enabled,
             seq_len=seq_len,
             stride=stride,
@@ -3822,7 +4142,10 @@ def train_multitask_nids_v3():
             unknown_head_policy=unknown_head_policy,
             task_activation=task_activation,
             use_reconstruction_hybrid_ood=use_reconstruction_hybrid_ood,
+            unknown_risk_score_mode=unknown_risk_score_mode,
             unknown_head_active=unknown_head_active,
+            ood_threshold_selection_policy=ood_threshold_selection_policy,
+            ood_max_fpr=ood_max_fpr,
             reconstruction_train_mae_mask_ratio=foundation_mask_ratios["train_mae_mask_ratio"],
             reconstruction_train_mfm_mask_ratio=foundation_mask_ratios["train_mfm_mask_ratio"],
             reconstruction_validation_mae_mask_ratio=foundation_mask_ratios["validation_mae_mask_ratio"],
@@ -4032,6 +4355,9 @@ def train_multitask_nids_v3():
                     thresholds=thresholds,
                     loss_weights=loss_weights,
                     known_attack_labels=train_dataset.known_attack_names,
+                    unknown_risk_score_mode=unknown_risk_score_mode,
+                    ood_threshold_selection_policy=ood_threshold_selection_policy,
+                    ood_max_fpr=ood_max_fpr,
                     validation_metrics=validation_metrics,
                 ),
             )
@@ -4053,6 +4379,7 @@ def train_multitask_nids_v3():
                 pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
                 future_horizon_minutes=future_horizon_minutes,
                 future_horizons_minutes=future_horizons_minutes,
+                future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
                 future_task_enabled=future_task_enabled,
                 seq_len=seq_len,
                 stride=stride,
@@ -4079,7 +4406,10 @@ def train_multitask_nids_v3():
                 unknown_head_policy=unknown_head_policy,
                 task_activation=task_activation,
                 use_reconstruction_hybrid_ood=use_reconstruction_hybrid_ood,
+                unknown_risk_score_mode=unknown_risk_score_mode,
                 unknown_head_active=unknown_head_active,
+                ood_threshold_selection_policy=ood_threshold_selection_policy,
+                ood_max_fpr=ood_max_fpr,
                 reconstruction_train_mae_mask_ratio=foundation_mask_ratios["train_mae_mask_ratio"],
                 reconstruction_train_mfm_mask_ratio=foundation_mask_ratios["train_mfm_mask_ratio"],
                 reconstruction_validation_mae_mask_ratio=foundation_mask_ratios["validation_mae_mask_ratio"],
@@ -4156,6 +4486,7 @@ def train_multitask_nids_v3():
                 pseudo_zero_day_rotation_size=pseudo_zero_day_rotation_size,
                 future_horizon_minutes=future_horizon_minutes,
                 future_horizons_minutes=future_horizons_minutes,
+                future_pre_onset_exclusion_gap_minutes=future_pre_onset_exclusion_gap_minutes,
                 future_task_enabled=future_task_enabled,
                 seq_len=seq_len,
                 stride=stride,
@@ -4182,7 +4513,10 @@ def train_multitask_nids_v3():
                 unknown_head_policy=unknown_head_policy,
                 task_activation=task_activation,
                 use_reconstruction_hybrid_ood=use_reconstruction_hybrid_ood,
+                unknown_risk_score_mode=unknown_risk_score_mode,
                 unknown_head_active=unknown_head_active,
+                ood_threshold_selection_policy=ood_threshold_selection_policy,
+                ood_max_fpr=ood_max_fpr,
                 reconstruction_train_mae_mask_ratio=foundation_mask_ratios["train_mae_mask_ratio"],
                 reconstruction_train_mfm_mask_ratio=foundation_mask_ratios["train_mfm_mask_ratio"],
                 reconstruction_validation_mae_mask_ratio=foundation_mask_ratios["validation_mae_mask_ratio"],
@@ -4292,6 +4626,9 @@ def train_multitask_nids_v3():
                     thresholds=thresholds,
                     loss_weights=loss_weights,
                     known_attack_labels=train_dataset.known_attack_names,
+                    unknown_risk_score_mode=unknown_risk_score_mode,
+                    ood_threshold_selection_policy=ood_threshold_selection_policy,
+                    ood_max_fpr=ood_max_fpr,
                     validation_metrics=reference_validation_metrics,
                 ),
                 checkpoint_overrides={
@@ -4409,6 +4746,9 @@ def train_multitask_nids_v3():
                 thresholds=thresholds,
                 loss_weights=loss_weights,
                 known_attack_labels=train_dataset.known_attack_names,
+                unknown_risk_score_mode=unknown_risk_score_mode,
+                ood_threshold_selection_policy=ood_threshold_selection_policy,
+                ood_max_fpr=ood_max_fpr,
                 validation_metrics=reference_family_validation_metrics,
             ),
         )

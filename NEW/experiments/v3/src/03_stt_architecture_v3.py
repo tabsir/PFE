@@ -89,6 +89,19 @@ def combine_unknown_scores(raw_unknown_probabilities, reconstruction_probabiliti
     return np.maximum(raw_unknown_probabilities, reconstruction_probabilities)
 
 
+def resolve_unknown_risk_probabilities(
+    raw_unknown_probabilities,
+    reconstruction_probabilities,
+    score_mode,
+):
+    score_mode = str(score_mode or "hybrid_max_raw_unknown_head_and_reconstruction_percentile")
+    if score_mode == "raw_unknown_head_only":
+        return np.asarray(raw_unknown_probabilities, dtype=np.float64).reshape(-1)
+    if score_mode == "reconstruction_percentile_only":
+        return np.asarray(reconstruction_probabilities, dtype=np.float64).reshape(-1)
+    return combine_unknown_scores(raw_unknown_probabilities, reconstruction_probabilities)
+
+
 def compute_combined_reconstruction_outputs(
     model,
     cont_data,
@@ -371,6 +384,7 @@ class NIDSMultiTaskModel(nn.Module):
         future_horizons_minutes=None,
         reconstruction_calibration=None,
         hybrid_ood_threshold=None,
+        unknown_risk_score_mode="hybrid_max_raw_unknown_head_and_reconstruction_percentile",
     ):
         current_probs = torch.sigmoid(outputs['current_attack_logits']).detach().cpu()
         future_logits = outputs.get('future_attack_logits')
@@ -427,6 +441,11 @@ class NIDSMultiTaskModel(nn.Module):
             raw_unknown_probabilities,
             reconstruction_probabilities,
         )
+        unknown_risk_probabilities = resolve_unknown_risk_probabilities(
+            raw_unknown_probabilities,
+            reconstruction_probabilities,
+            unknown_risk_score_mode,
+        )
         unknown_threshold = float(hybrid_ood_threshold) if hybrid_ood_threshold is not None else float(ood_threshold)
 
         if outputs.get('attack_family_logits') is not None:
@@ -445,9 +464,10 @@ class NIDSMultiTaskModel(nn.Module):
             reconstruction_prob = float(reconstruction_probabilities[idx])
             reconstruction_score_value = float(reconstruction_scores[idx])
             hybrid_unknown_risk_prob = float(hybrid_unknown_probabilities[idx])
+            unknown_risk_prob = float(unknown_risk_probabilities[idx])
             known_conf = float(known_confidence[idx])
             current_alarm = current_prob >= current_threshold
-            novelty_alarm = hybrid_unknown_risk_prob >= unknown_threshold
+            novelty_alarm = unknown_risk_prob >= unknown_threshold
             future_probabilities = (
                 {
                     label: float(future_probs[idx, horizon_idx])
@@ -485,6 +505,8 @@ class NIDSMultiTaskModel(nn.Module):
                 'reconstruction_novelty_score': reconstruction_score_value,
                 'reconstruction_novelty_probability': reconstruction_prob,
                 'hybrid_unknown_risk_probability': hybrid_unknown_risk_prob,
+                'unknown_risk_score_mode': str(unknown_risk_score_mode),
+                'unknown_risk_probability': unknown_risk_prob,
                 'novelty_watch': novelty_watch,
                 'unknown_attack_warning': unknown_attack_warning,
                 'family_rejection_warning': family_rejection,
@@ -492,7 +514,7 @@ class NIDSMultiTaskModel(nn.Module):
                 'unknown_risk_threshold': unknown_threshold,
                 'current_attack_threshold': float(current_threshold),
                 'known_attack_threshold': float(known_attack_threshold),
-                'unknown_attack_probability': hybrid_unknown_risk_prob,
+                'unknown_attack_probability': unknown_risk_prob,
                 'raw_unknown_attack_probability': raw_unknown_prob,
                 'reconstruction_anomaly_score': reconstruction_score_value,
                 'reconstruction_anomaly_probability': reconstruction_prob,

@@ -222,6 +222,16 @@ def load_checkpoint(checkpoint_path, device):
     use_reconstruction_hybrid_ood = bool(
         checkpoint.get("use_reconstruction_hybrid_ood", False) and reconstruction_calibration is not None
     )
+    unknown_risk_score_mode = str(
+        checkpoint.get(
+            "unknown_risk_score_mode",
+            v3_train.resolve_unknown_risk_score_mode(
+                None,
+                use_reconstruction_hybrid_ood,
+                bool(checkpoint.get("unknown_head_active", checkpoint_uses_ood_head(checkpoint))),
+            ),
+        )
+    )
     reconstruction_validation_mae_mask_ratio = float(
         checkpoint.get("reconstruction_validation_mae_mask_ratio", 0.30)
     )
@@ -245,6 +255,7 @@ def load_checkpoint(checkpoint_path, device):
         reconstruction_validation_mfm_mask_ratio,
         reconstruction_train_mae_mask_ratio,
         reconstruction_train_mfm_mask_ratio,
+        unknown_risk_score_mode,
         str(checkpoint.get("run_mode", v3_train.RUN_MODE_CLOSED_SET)),
         str(checkpoint.get("thesis_claim", v3_train.DEFAULT_CLOSED_SET_THESIS_CLAIM)),
         str(checkpoint.get("novelty_score_mode", v3_train.DEFAULT_NOVELTY_SCORE_MODE)),
@@ -518,6 +529,7 @@ def run_inference():
         reconstruction_validation_mfm_mask_ratio,
         reconstruction_train_mae_mask_ratio,
         reconstruction_train_mfm_mask_ratio,
+        unknown_risk_score_mode,
         run_mode,
         thesis_claim,
         novelty_score_mode,
@@ -585,6 +597,7 @@ def run_inference():
     print(f"Active thresholds: {thresholds}")
     print(f"Explicit unknown head available: {checkpoint_uses_ood_head(checkpoint)}")
     print(f"Unknown-head supervision active: {unknown_head_active}")
+    print(f"Unknown-risk score mode: {unknown_risk_score_mode}")
     print(
         "Hybrid reconstruction-backed unknown risk: "
         f"{use_reconstruction_hybrid_ood}"
@@ -656,6 +669,7 @@ def run_inference():
                 future_horizons_minutes=future_horizons_minutes,
                 reconstruction_calibration=reconstruction_calibration if use_reconstruction_hybrid_ood else None,
                 hybrid_ood_threshold=thresholds["ood"] if use_reconstruction_hybrid_ood else None,
+                unknown_risk_score_mode=unknown_risk_score_mode,
             )
 
             batch_size = len(decoded_predictions)

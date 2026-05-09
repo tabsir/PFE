@@ -1,0 +1,12 @@
+{
+  "raw_attack_names": [
+    "Benign",
+    "Bot"
+  ],
+  "current_label_rule": "last_half_attack",
+  "future_horizons_minutes": [
+    10,
+    15
+  ],
+  "future_pre_onset_exclusion_gap_minutes": 1.0
+}

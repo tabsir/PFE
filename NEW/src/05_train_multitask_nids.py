@@ -402,6 +402,71 @@ def select_threshold_for_target_recall(labels, probabilities, target_recall):
     return selected or fallback
 
 
+def select_threshold_for_max_fpr(labels, probabilities, max_fpr):
+    """Pick the highest-recall threshold that stays under the requested false-positive rate."""
+    labels = np.asarray(labels, dtype=np.int64)
+    probs = np.asarray(probabilities, dtype=np.float64)
+    if labels.size == 0:
+        return {
+            "threshold": 0.5,
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "false_positive_rate": 0.0,
+            "meets_max_fpr": True,
+            "selection_policy": "max_recall_under_fpr_cap",
+            "max_fpr": float(max_fpr),
+        }
+
+    candidates = np.unique(np.concatenate([
+        np.linspace(0.0, 1.0, 101),
+        np.percentile(probs, [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]),
+        probs,
+    ]))
+
+    selected = None
+    fallback = None
+    for t in np.sort(candidates)[::-1]:
+        preds = probs >= t
+        tp = int(np.logical_and(preds, labels == 1).sum())
+        fp = int(np.logical_and(preds, labels == 0).sum())
+        fn = int(np.logical_and(~preds, labels == 1).sum())
+        tn = int(np.logical_and(~preds, labels == 0).sum())
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        false_positive_rate = fp / max(fp + tn, 1)
+        f1 = 2.0 * precision * recall / max(precision + recall, 1e-9)
+        record = {
+            "threshold": float(t),
+            "f1": float(f1),
+            "precision": float(precision),
+            "recall": float(recall),
+            "false_positive_rate": float(false_positive_rate),
+            "meets_max_fpr": float(false_positive_rate) <= float(max_fpr),
+            "selection_policy": "max_recall_under_fpr_cap",
+            "max_fpr": float(max_fpr),
+        }
+
+        if fallback is None or (record["false_positive_rate"], -record["threshold"], record["recall"]) < (
+            fallback["false_positive_rate"],
+            -fallback["threshold"],
+            fallback["recall"],
+        ):
+            fallback = record
+
+        if not record["meets_max_fpr"]:
+            continue
+
+        if selected is None or (record["recall"], record["precision"], record["threshold"]) > (
+            selected["recall"],
+            selected["precision"],
+            selected["threshold"],
+        ):
+            selected = record
+
+    return selected or fallback
+
+
 class DownstreamNIDSDataset(Dataset):
     def __init__(
         self,

@@ -125,7 +125,7 @@ def parse_args():
         "--bootstrap-samples",
         type=int,
         default=0,
-        help="Optional number of bootstrap resamples for 95% confidence intervals on PR-AUC, recall, and F1.",
+        help="Optional number of bootstrap resamples for 95%% confidence intervals on PR-AUC, recall, and F1.",
     )
     parser.add_argument(
         "--bootstrap-seed",
@@ -191,6 +191,14 @@ def resolve_unknown_risk_score_mode(use_ood_head, use_reconstruction_hybrid_ood)
     return "disabled"
 
 
+def resolve_unknown_risk_probabilities(raw_unknown_probabilities, reconstruction_probabilities, score_mode):
+    return stt_architecture.resolve_unknown_risk_probabilities(
+        raw_unknown_probabilities,
+        reconstruction_probabilities,
+        score_mode,
+    )
+
+
 def load_checkpoint(checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     thresholds = checkpoint.get("thresholds", {"current": 0.5, "known": 0.55, "future": 0.5, "ood": 0.5})
@@ -227,6 +235,12 @@ def load_checkpoint(checkpoint_path, device):
         "pseudo_zero_day_families": pseudo_zero_day_families,
         "future_horizons_minutes": future_horizons_minutes,
         "future_horizon_minutes": int(future_horizons_minutes[-1]),
+        "future_pre_onset_exclusion_gap_minutes": float(
+            checkpoint.get(
+                "future_pre_onset_exclusion_gap_minutes",
+                v3_train.DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES,
+            )
+        ),
         "future_horizon_labels": v3_train.build_future_horizon_labels(future_horizons_minutes),
         "future_task_enabled": future_task_enabled,
         "run_mode": str(checkpoint.get("run_mode", v3_train.RUN_MODE_CLOSED_SET)),
@@ -239,6 +253,10 @@ def load_checkpoint(checkpoint_path, device):
         "reconstruction_calibration": reconstruction_calibration,
         "use_reconstruction_hybrid_ood": use_reconstruction_hybrid_ood,
         "unknown_risk_score_mode": unknown_risk_score_mode,
+        "ood_threshold_selection_policy": str(
+            checkpoint.get("ood_threshold_selection_policy", "target_recall")
+        ),
+        "ood_max_fpr": float(checkpoint.get("ood_max_fpr", 0.01)),
         "reconstruction_train_mae_mask_ratio": float(
             checkpoint.get("reconstruction_train_mae_mask_ratio", 0.10)
         ),
@@ -353,6 +371,9 @@ def build_downstream_dataset(split_name, checkpoint_bundle):
     downstream_dataset = DownstreamNIDSDataset(
         base_dataset=base_dataset,
         future_horizons_minutes=checkpoint_bundle["future_horizons_minutes"],
+        future_pre_onset_exclusion_gap_minutes=checkpoint_bundle[
+            "future_pre_onset_exclusion_gap_minutes"
+        ],
         known_attack_to_idx=known_attack_to_idx,
         max_sequences=None,
     )
@@ -371,10 +392,27 @@ def build_dataset_profile(split_name, checkpoint_bundle):
     )
     unknown_positive_count = int(dataset.unknown_attack_targets.sum())
     known_family_count = int((dataset.known_attack_targets >= 0).sum())
-    future_positive_count = int(dataset.future_attack_any_targets.sum())
+    future_target_matrix = np.asarray(dataset.future_attack_targets, dtype=np.float32)
+    future_supervision_mask = np.asarray(dataset.future_supervision_mask, dtype=bool)
+    valid_future_target_matrix = future_target_matrix.astype(bool) & future_supervision_mask
+    raw_future_target_matrix = future_target_matrix.astype(bool)
+    future_positive_count = int(valid_future_target_matrix.any(axis=1).sum())
+    future_raw_positive_count = int(raw_future_target_matrix.any(axis=1).sum())
     future_positive_counts_by_horizon = {
-        horizon_label: int(dataset.future_attack_targets[:, horizon_idx].sum())
+        horizon_label: int(valid_future_target_matrix[:, horizon_idx].sum())
         for horizon_idx, horizon_label in enumerate(dataset.future_horizon_labels)
+    }
+    future_raw_positive_counts_by_horizon = {
+        horizon_label: int(raw_future_target_matrix[:, horizon_idx].sum())
+        for horizon_idx, horizon_label in enumerate(dataset.future_horizon_labels)
+    }
+    future_ignored_near_onset_positive_counts_by_horizon = {
+        horizon_label: max(
+            future_raw_positive_counts_by_horizon[horizon_label]
+            - future_positive_counts_by_horizon[horizon_label],
+            0,
+        )
+        for horizon_label in dataset.future_horizon_labels
     }
 
     return {
@@ -385,7 +423,14 @@ def build_dataset_profile(split_name, checkpoint_bundle):
         "unknown_positive_count": unknown_positive_count,
         "known_family_count": known_family_count,
         "future_positive_count": future_positive_count,
+        "future_raw_positive_count": future_raw_positive_count,
+        "future_ignored_near_onset_positive_count": max(
+            future_raw_positive_count - future_positive_count,
+            0,
+        ),
         "future_positive_counts_by_horizon": future_positive_counts_by_horizon,
+        "future_raw_positive_counts_by_horizon": future_raw_positive_counts_by_horizon,
+        "future_ignored_near_onset_positive_counts_by_horizon": future_ignored_near_onset_positive_counts_by_horizon,
         "attack_family_counts": dict(family_counts),
     }
 
@@ -555,6 +600,7 @@ def compute_future_bootstrap_confidence_intervals(
     future_horizon_labels,
     samples,
     seed,
+    future_supervision_masks=None,
 ):
     future_labels = np.asarray(future_labels, dtype=np.float64)
     future_probabilities = np.asarray(future_probabilities, dtype=np.float64)
@@ -565,9 +611,14 @@ def compute_future_bootstrap_confidence_intervals(
         future_labels = future_labels.reshape(-1, 1)
     if future_probabilities.ndim == 1:
         future_probabilities = future_probabilities.reshape(-1, 1)
+    if future_supervision_masks is not None:
+        future_supervision_masks = np.asarray(future_supervision_masks, dtype=bool)
+        if future_supervision_masks.ndim == 1:
+            future_supervision_masks = future_supervision_masks.reshape(-1, 1)
+    else:
+        future_supervision_masks = np.ones_like(future_labels, dtype=bool)
 
-    row_count = future_labels.shape[0]
-    if row_count == 0:
+    if future_labels.shape[0] == 0:
         return None, {}
 
     rng = np.random.default_rng(int(seed))
@@ -578,12 +629,24 @@ def compute_future_bootstrap_confidence_intervals(
     }
 
     for _ in range(int(samples)):
-        sample_indices = rng.integers(0, row_count, size=row_count)
         sampled_metrics_by_horizon = {}
         for horizon_idx, horizon_label in enumerate(future_horizon_labels):
+            horizon_mask = future_supervision_masks[:, horizon_idx].astype(bool)
+            horizon_labels = future_labels[horizon_mask, horizon_idx].astype(np.int64)
+            horizon_probabilities = future_probabilities[horizon_mask, horizon_idx]
+            row_count = horizon_labels.shape[0]
+            if row_count == 0:
+                sampled_metrics = base_train.compute_binary_metrics(
+                    np.array([], dtype=np.int64),
+                    np.array([], dtype=np.float64),
+                    float(future_thresholds[horizon_label]),
+                )
+                sampled_metrics_by_horizon[horizon_label] = sampled_metrics
+                continue
+            sample_indices = rng.integers(0, row_count, size=row_count)
             sampled_metrics = base_train.compute_binary_metrics(
-                future_labels[sample_indices, horizon_idx].astype(np.int64),
-                future_probabilities[sample_indices, horizon_idx],
+                horizon_labels[sample_indices],
+                horizon_probabilities[sample_indices],
                 float(future_thresholds[horizon_label]),
             )
             sampled_metrics_by_horizon[horizon_label] = sampled_metrics
@@ -718,6 +781,7 @@ def collect_split_outputs(
     future_probs = []
     future_labels = []
     future_leads = []
+    future_supervision_masks = []
     raw_ood_probs = []
     ood_labels = []
     reconstruction_scores = []
@@ -826,13 +890,17 @@ def collect_split_outputs(
                         future_probability = future_probability.reshape(-1, 1)
                     future_target = batch["future_attack"][benign_mask].cpu().numpy()
                     future_lead = batch["future_lead_minutes"][benign_mask].cpu().numpy()
+                    future_supervision_mask = batch["future_supervision_mask"][benign_mask].cpu().numpy()
                     if future_target.ndim == 1:
                         future_target = future_target.reshape(-1, 1)
                     if future_lead.ndim == 1:
                         future_lead = future_lead.reshape(-1, 1)
+                    if future_supervision_mask.ndim == 1:
+                        future_supervision_mask = future_supervision_mask.reshape(-1, 1)
                     future_probs.append(future_probability)
                     future_labels.append(future_target)
                     future_leads.append(future_lead)
+                    future_supervision_masks.append(future_supervision_mask)
 
             if outputs.get("attack_family_logits") is not None:
                 family_probability = torch.softmax(outputs["attack_family_logits"], dim=-1).cpu().numpy()
@@ -868,6 +936,10 @@ def collect_split_outputs(
             np.concatenate(future_leads, axis=0)
             if future_leads else np.zeros((0, len(future_horizons_minutes)), dtype=np.float32)
         ),
+        "future_supervision_masks": (
+            np.concatenate(future_supervision_masks, axis=0)
+            if future_supervision_masks else np.zeros((0, len(future_horizons_minutes)), dtype=np.float32)
+        ),
         "raw_ood_head_probabilities": (
             np.concatenate(raw_ood_probs) if raw_ood_probs else np.array([])
         ),
@@ -892,13 +964,13 @@ def collect_split_outputs(
         arrays["reconstruction_scores"],
         reconstruction_calibration,
     )
-    arrays["ood_probabilities"] = (
-        stt_architecture.combine_unknown_scores(
-            arrays["raw_ood_head_probabilities"],
-            arrays["reconstruction_probabilities"],
-        )
-        if use_reconstruction_hybrid_ood
-        else arrays["raw_ood_head_probabilities"]
+    arrays["ood_probabilities"] = resolve_unknown_risk_probabilities(
+        arrays["raw_ood_head_probabilities"],
+        arrays["reconstruction_probabilities"],
+        checkpoint_bundle.get(
+            "unknown_risk_score_mode",
+            resolve_unknown_risk_score_mode(use_ood_head, use_reconstruction_hybrid_ood),
+        ),
     )
 
     if profile is None:
@@ -993,10 +1065,14 @@ def collect_split_outputs(
         future_oracle_by_horizon = {}
         mean_future_lead_minutes_by_horizon = {}
         for horizon_idx, horizon_label in enumerate(future_horizon_labels):
-            horizon_labels = arrays["future_labels"][:, horizon_idx]
-            horizon_probs = arrays["future_probabilities"][:, horizon_idx]
-            horizon_leads = arrays["future_leads"][:, horizon_idx]
+            horizon_supervision_mask = arrays["future_supervision_masks"][:, horizon_idx].astype(bool)
+            horizon_labels = arrays["future_labels"][horizon_supervision_mask, horizon_idx]
+            horizon_probs = arrays["future_probabilities"][horizon_supervision_mask, horizon_idx]
+            horizon_leads = arrays["future_leads"][horizon_supervision_mask, horizon_idx]
             horizon_threshold = thresholds["future"][horizon_label]
+            raw_positive_count = int(arrays["future_labels"][:, horizon_idx].sum())
+            valid_positive_count = int(horizon_labels.sum())
+            ignored_near_onset_positive_count = max(raw_positive_count - valid_positive_count, 0)
 
             future_at_validation_by_horizon[horizon_label] = base_train.compute_binary_metrics(
                 horizon_labels,
@@ -1010,6 +1086,17 @@ def collect_split_outputs(
                     bins=calibration_bins,
                 )
             )
+            future_at_validation_by_horizon[horizon_label].update(
+                {
+                    "valid_count": int(horizon_labels.shape[0]),
+                    "raw_positive_count": raw_positive_count,
+                    "valid_positive_count": valid_positive_count,
+                    "ignored_near_onset_positive_count": ignored_near_onset_positive_count,
+                    "future_pre_onset_exclusion_gap_minutes": float(
+                        checkpoint_bundle["future_pre_onset_exclusion_gap_minutes"]
+                    ),
+                }
+            )
             future_selection = base_train.select_threshold_for_target_recall(
                 horizon_labels,
                 horizon_probs,
@@ -1021,6 +1108,17 @@ def collect_split_outputs(
                 future_selection["threshold"],
             )
             future_oracle_metrics.update(future_selection)
+            future_oracle_metrics.update(
+                {
+                    "valid_count": int(horizon_labels.shape[0]),
+                    "raw_positive_count": raw_positive_count,
+                    "valid_positive_count": valid_positive_count,
+                    "ignored_near_onset_positive_count": ignored_near_onset_positive_count,
+                    "future_pre_onset_exclusion_gap_minutes": float(
+                        checkpoint_bundle["future_pre_onset_exclusion_gap_minutes"]
+                    ),
+                }
+            )
             future_oracle_by_horizon[horizon_label] = future_oracle_metrics
 
             future_hits = (horizon_probs >= horizon_threshold) & (horizon_labels == 1)
@@ -1039,6 +1137,9 @@ def collect_split_outputs(
             dtype=np.float64,
         )
         future_at_validation["thresholds"] = dict(thresholds["future"])
+        future_at_validation["future_pre_onset_exclusion_gap_minutes"] = float(
+            checkpoint_bundle["future_pre_onset_exclusion_gap_minutes"]
+        )
         future_at_validation["brier_score"] = (
             float(np.nanmean(future_brier_values))
             if future_brier_values.size and not np.isnan(future_brier_values).all()
@@ -1053,6 +1154,9 @@ def collect_split_outputs(
         future_oracle["thresholds"] = {
             horizon_label: metrics["threshold"] for horizon_label, metrics in future_oracle_by_horizon.items()
         }
+        future_oracle["future_pre_onset_exclusion_gap_minutes"] = float(
+            checkpoint_bundle["future_pre_onset_exclusion_gap_minutes"]
+        )
         mean_future_lead_minutes = (
             float(np.nanmean(np.asarray(list(mean_future_lead_minutes_by_horizon.values()), dtype=np.float64)))
             if mean_future_lead_minutes_by_horizon and not np.isnan(np.asarray(list(mean_future_lead_minutes_by_horizon.values()), dtype=np.float64)).all()
@@ -1115,6 +1219,7 @@ def collect_split_outputs(
             future_horizon_labels,
             bootstrap_samples,
             split_seed + 2,
+            future_supervision_masks=arrays["future_supervision_masks"],
         )
     else:
         future_bootstrap = None
@@ -1162,6 +1267,9 @@ def collect_split_outputs(
         "bootstrap_samples": int(bootstrap_samples),
         "threshold_target_recall": checkpoint_bundle["threshold_target_recall"],
         "future_threshold_target_recall": checkpoint_bundle["future_threshold_target_recall"],
+        "future_pre_onset_exclusion_gap_minutes": checkpoint_bundle[
+            "future_pre_onset_exclusion_gap_minutes"
+        ],
         "ood_threshold_target_recall": checkpoint_bundle["ood_threshold_target_recall"],
         "known_target_unknown_recall": checkpoint_bundle["known_target_unknown_recall"],
         "run_mode": checkpoint_bundle.get("run_mode", v3_train.RUN_MODE_CLOSED_SET),
@@ -1339,6 +1447,12 @@ def load_epoch_history(checkpoint_dir, device):
             "best_future_f1": float(best_future.get("f1", float("nan"))),
             "best_future_false_positive_rate": float(best_future.get("false_positive_rate", float("nan"))),
             "best_future_threshold": float(best_future.get("threshold", float("nan"))),
+            "future_pre_onset_exclusion_gap_minutes": float(
+                checkpoint.get(
+                    "future_pre_onset_exclusion_gap_minutes",
+                    v3_train.DEFAULT_FUTURE_PRE_ONSET_EXCLUSION_GAP_MINUTES,
+                )
+            ),
             "known_family_accuracy": float(validation_metrics.get("known_family_accuracy", float("nan"))),
             "known_family_accepted_accuracy": float(validation_metrics.get("known_family_accepted_accuracy", float("nan"))),
             "known_family_coverage": float(validation_metrics.get("known_family_coverage", float("nan"))),
@@ -1384,6 +1498,16 @@ def load_epoch_history(checkpoint_dir, device):
             row[f"best_future_recall_{safe_label}"] = float(best_horizon_metrics.get("recall", float("nan")))
             row[f"best_future_f1_{safe_label}"] = float(best_horizon_metrics.get("f1", float("nan")))
             row[f"best_future_threshold_{safe_label}"] = float(best_horizon_metrics.get("threshold", float("nan")))
+            row[f"future_valid_count_{safe_label}"] = float(horizon_metrics.get("valid_count", float("nan")))
+            row[f"future_raw_positive_count_{safe_label}"] = float(
+                horizon_metrics.get("raw_positive_count", float("nan"))
+            )
+            row[f"future_valid_positive_count_{safe_label}"] = float(
+                horizon_metrics.get("valid_positive_count", float("nan"))
+            )
+            row[f"future_ignored_near_onset_positive_count_{safe_label}"] = float(
+                horizon_metrics.get("ignored_near_onset_positive_count", float("nan"))
+            )
             row[f"mean_future_lead_minutes_{safe_label}"] = float(
                 mean_future_lead_by_horizon.get(horizon_label, float("nan"))
             )
@@ -2069,6 +2193,16 @@ def write_markdown_summary(summary, output_path):
     if summary["future_at_validation_threshold"] is not None:
         future_metrics = summary["future_at_validation_threshold"]
         lines.append("## Future Warning")
+        lines.append(
+            "- Pre-onset exclusion gap minutes: "
+            f"{summary.get('future_pre_onset_exclusion_gap_minutes', 0.0):.3f}"
+        )
+        lines.append(
+            "- Valid future positives on this split: "
+            f"{summary.get('future_positive_count', 0)} "
+            f"(raw={summary.get('future_raw_positive_count', 0)}, "
+            f"ignored_near_onset={summary.get('future_ignored_near_onset_positive_count', 0)})"
+        )
         lines.append(f"- Macro PR-AUC: {future_metrics['pr_auc']:.6f}" if future_metrics["pr_auc"] == future_metrics["pr_auc"] else "- Macro PR-AUC: n/a")
         lines.append(f"- Macro AUC: {future_metrics['auc']:.6f}" if future_metrics["auc"] == future_metrics["auc"] else "- Macro AUC: n/a")
         lines.append(f"- Macro precision: {future_metrics['precision']:.6f}")
@@ -2087,6 +2221,9 @@ def write_markdown_summary(summary, output_path):
             lead_minutes = summary.get("mean_future_lead_minutes_by_horizon", {}).get(horizon_label, float("nan"))
             lines.append(
                 f"- {horizon_label}: threshold={horizon_threshold:.6f}, "
+                f"valid_count={int(horizon_metrics.get('valid_count', 0))}, "
+                f"valid_pos={int(horizon_metrics.get('valid_positive_count', 0))}, "
+                f"ignored_near_onset_pos={int(horizon_metrics.get('ignored_near_onset_positive_count', 0))}, "
                 f"PR-AUC={horizon_metrics.get('pr_auc', float('nan')):.6f}, "
                 f"AUC={horizon_metrics.get('auc', float('nan')):.6f}, "
                 f"precision={horizon_metrics.get('precision', float('nan')):.6f}, "
