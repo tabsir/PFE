@@ -1,4 +1,5 @@
 import argparse
+import gc
 import importlib.util
 import json
 import os
@@ -133,6 +134,12 @@ def parse_args():
         default=42,
         help="Random seed used for bootstrap confidence intervals.",
     )
+    parser.add_argument(
+        "--progress-log-interval",
+        type=int,
+        default=25,
+        help="Write an explicit progress log every N evaluation batches. Set to 0 to disable.",
+    )
     return parser.parse_args()
 
 
@@ -140,6 +147,12 @@ def ensure_dir(path):
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def release_memory():
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def to_serializable(value):
@@ -477,27 +490,51 @@ def threshold_sweep(labels, scores, threshold_candidates=None):
         return pd.DataFrame(columns=["threshold", "precision", "recall", "f1", "false_positive_rate"])
 
     if threshold_candidates is None:
+        # The sweep is only used for diagnostic figures, so avoid using every
+        # raw score as a threshold candidate on very large splits.
         threshold_candidates = np.unique(
             np.concatenate([
                 np.linspace(0.0, 1.0, 101),
                 np.percentile(scores, [1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99]),
-                scores,
+                np.quantile(scores, np.linspace(0.0, 1.0, 301)),
             ])
         )
 
-    rows = []
-    for threshold_value in np.sort(threshold_candidates):
-        metrics = base_train.compute_binary_metrics(labels, scores, float(threshold_value))
-        rows.append(
-            {
-                "threshold": float(threshold_value),
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-                "f1": metrics["f1"],
-                "false_positive_rate": metrics["false_positive_rate"],
-            }
-        )
-    return pd.DataFrame(rows)
+    threshold_candidates = np.sort(np.unique(np.asarray(threshold_candidates, dtype=np.float64)))
+    if threshold_candidates.size == 0:
+        return pd.DataFrame(columns=["threshold", "precision", "recall", "f1", "false_positive_rate"])
+
+    order = np.argsort(scores)
+    sorted_scores = scores[order]
+    sorted_labels = labels[order]
+    positive_prefix = np.concatenate([[0], np.cumsum(sorted_labels == 1, dtype=np.int64)])
+    negative_prefix = np.concatenate([[0], np.cumsum(sorted_labels == 0, dtype=np.int64)])
+    positive_total = int(positive_prefix[-1])
+    negative_total = int(negative_prefix[-1])
+
+    threshold_indices = np.searchsorted(sorted_scores, threshold_candidates, side="left")
+    true_positive = positive_total - positive_prefix[threshold_indices]
+    false_positive = negative_total - negative_prefix[threshold_indices]
+    predicted_positive = true_positive + false_positive
+
+    precision = true_positive / np.maximum(predicted_positive, 1)
+    recall = true_positive / max(positive_total, 1)
+    f1 = np.where(
+        precision + recall > 0.0,
+        2.0 * precision * recall / np.maximum(precision + recall, 1e-12),
+        0.0,
+    )
+    false_positive_rate = false_positive / max(negative_total, 1)
+
+    return pd.DataFrame(
+        {
+            "threshold": threshold_candidates.astype(np.float64),
+            "precision": precision.astype(np.float64),
+            "recall": recall.astype(np.float64),
+            "f1": f1.astype(np.float64),
+            "false_positive_rate": false_positive_rate.astype(np.float64),
+        }
+    )
 
 
 def prepare_binary_arrays(labels, scores):
@@ -754,6 +791,7 @@ def collect_split_outputs(
     calibration_bins=10,
     bootstrap_samples=0,
     bootstrap_seed=42,
+    progress_log_interval=25,
 ):
     print(f"[{split_name}] Building evaluation dataset...", flush=True)
     dataset = build_downstream_dataset(split_name, checkpoint_bundle)
@@ -791,6 +829,7 @@ def collect_split_outputs(
     known_current_probs = []
     known_predictions = []
     known_targets = []
+    known_family_probabilities = []
     unknown_confidences = []
     unknown_current_probs = []
     use_ood_head = bool(checkpoint_bundle.get("use_ood_head", True))
@@ -807,15 +846,26 @@ def collect_split_outputs(
     )
     ood_metric_available = bool(use_ood_head or use_reconstruction_hybrid_ood)
 
+    use_tqdm = os.isatty(1)
     with torch.no_grad():
         for batch_index, batch in enumerate(
             tqdm(
-            data_loader,
-            total=len(data_loader),
-            desc=f"Eval {split_name}",
-            leave=False,
+                data_loader,
+                total=len(data_loader),
+                desc=f"Eval {split_name}",
+                leave=False,
+                disable=not use_tqdm,
             )
         ):
+            completed_batches = batch_index + 1
+            if progress_log_interval > 0 and (
+                completed_batches % progress_log_interval == 0 or completed_batches == len(data_loader)
+            ):
+                progress_pct = 100.0 * completed_batches / max(len(data_loader), 1)
+                print(
+                    f"[{split_name}] Evaluation progress: {completed_batches:,}/{len(data_loader):,} batches ({progress_pct:.1f}%)",
+                    flush=True,
+                )
             cont = batch["continuous"].to(device, non_blocking=True)
             cat = batch["categorical"].to(device, non_blocking=True)
             reconstruction_mask = None
@@ -915,6 +965,7 @@ def collect_split_outputs(
                     known_current_probs.append(current_probability[known_mask])
                     known_predictions.append(family_prediction[known_mask])
                     known_targets.append(known_attack_target[known_mask])
+                    known_family_probabilities.append(family_probability[known_mask])
 
                 unknown_mask = unknown_target == 1
                 if unknown_mask.any():
@@ -957,6 +1008,11 @@ def collect_split_outputs(
         "known_current_probabilities": np.concatenate(known_current_probs) if known_current_probs else np.array([]),
         "known_predictions": np.concatenate(known_predictions) if known_predictions else np.array([]),
         "known_targets": np.concatenate(known_targets) if known_targets else np.array([]),
+        "known_family_probabilities": (
+            np.concatenate(known_family_probabilities, axis=0)
+            if known_family_probabilities
+            else np.zeros((0, len(checkpoint_bundle["known_attack_labels"])), dtype=np.float32)
+        ),
         "unknown_confidences": np.concatenate(unknown_confidences) if unknown_confidences else np.array([]),
         "unknown_current_probabilities": np.concatenate(unknown_current_probs) if unknown_current_probs else np.array([]),
     }
@@ -1251,6 +1307,63 @@ def collect_split_outputs(
         if arrays["known_targets"].size
         else float("nan")
     )
+    raw_known_macro_f1 = (
+        float(v3_train.compute_multiclass_macro_f1(arrays["known_targets"], arrays["known_predictions"]))
+        if arrays["known_targets"].size
+        else float("nan")
+    )
+    raw_known_metrics_by_label = v3_train.compute_multiclass_metrics_by_label(
+        arrays["known_targets"],
+        arrays["known_predictions"],
+        checkpoint_bundle["known_attack_labels"],
+    )
+    raw_known_metrics_by_label = v3_train.add_ovr_curve_metrics_by_label(
+        raw_known_metrics_by_label,
+        arrays["known_targets"],
+        arrays["known_family_probabilities"],
+        checkpoint_bundle["known_attack_labels"],
+    )
+
+    accepted_known_gate = (
+        (arrays["known_current_probabilities"] >= thresholds["current"])
+        & (arrays["known_confidences"] >= thresholds["known"])
+    ) if arrays["known_targets"].size and arrays["known_confidences"].size else np.zeros(0, dtype=bool)
+    accepted_known_macro_f1 = (
+        float(
+            v3_train.compute_multiclass_macro_f1(
+                arrays["known_targets"][accepted_known_gate],
+                arrays["known_predictions"][accepted_known_gate],
+            )
+        )
+        if accepted_known_gate.size
+        else float("nan")
+    )
+    accepted_known_metrics_by_label = v3_train.compute_multiclass_metrics_by_label(
+        arrays["known_targets"],
+        arrays["known_predictions"],
+        checkpoint_bundle["known_attack_labels"],
+        accepted_mask=accepted_known_gate,
+    )
+    accepted_known_targets = arrays["known_targets"][accepted_known_gate] if accepted_known_gate.size else np.array([])
+    accepted_known_family_probabilities = (
+        arrays["known_family_probabilities"][accepted_known_gate]
+        if accepted_known_gate.size and arrays["known_family_probabilities"].size
+        else np.zeros(
+            (
+                0,
+                arrays["known_family_probabilities"].shape[1]
+                if arrays["known_family_probabilities"].ndim == 2
+                else 0,
+            ),
+            dtype=np.float64,
+        )
+    )
+    accepted_known_metrics_by_label = v3_train.add_ovr_curve_metrics_by_label(
+        accepted_known_metrics_by_label,
+        accepted_known_targets,
+        accepted_known_family_probabilities,
+        checkpoint_bundle["known_attack_labels"],
+    )
 
     summary = {
         "split": split_name,
@@ -1307,7 +1420,11 @@ def collect_split_outputs(
         "future_oracle_for_this_split_diagnostic_only": future_oracle,
         "future_oracle_for_this_split_diagnostic_only_by_horizon": future_oracle_by_horizon,
         "known_family_accuracy": raw_known_accuracy,
+        "known_family_macro_f1": raw_known_macro_f1,
+        "known_family_metrics_by_label": raw_known_metrics_by_label,
         "known_gate_at_validation_threshold": known_gate_at_validation,
+        "known_family_accepted_macro_f1": accepted_known_macro_f1,
+        "known_family_accepted_metrics_by_label": accepted_known_metrics_by_label,
         "known_gate_oracle_for_this_split_diagnostic_only": known_oracle,
         "unknown_warning_recall": ood_at_validation["recall"] if ood_at_validation is not None else None,
         "unknown_label_positive_count": int(arrays["ood_labels"].sum()) if arrays["ood_labels"].size else 0,
@@ -1769,6 +1886,28 @@ def plot_score_histogram(labels, scores, threshold, output_path, manifest_entrie
     save_figure(fig, output_path, manifest_entries, title, f"Score histogram by ground-truth label for {title.lower()}.", dpi)
 
 
+def annotate_confusion_matrix(ax, matrix, fontsize=9, skip_zero=False):
+    matrix = np.asarray(matrix, dtype=np.int64)
+    total_count = int(matrix.sum())
+    max_count = int(matrix.max()) if matrix.size else 0
+    for row_idx in range(matrix.shape[0]):
+        for col_idx in range(matrix.shape[1]):
+            cell_count = int(matrix[row_idx, col_idx])
+            if skip_zero and cell_count == 0:
+                continue
+            cell_pct = 100.0 * cell_count / total_count if total_count > 0 else 0.0
+            text_color = "white" if cell_count >= max_count * 0.55 and max_count > 0 else "black"
+            ax.text(
+                col_idx,
+                row_idx,
+                f"{cell_count}\n{cell_pct:.1f}%",
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=fontsize,
+            )
+
+
 def plot_confusion_matrix(matrix, output_path, manifest_entries, title, class_names, dpi):
     fig, ax = plt.subplots(figsize=(5.5, 4.8))
     image = ax.imshow(matrix, cmap="Blues")
@@ -1778,9 +1917,7 @@ def plot_confusion_matrix(matrix, output_path, manifest_entries, title, class_na
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
     ax.set_title(title)
-    for row_idx in range(matrix.shape[0]):
-        for col_idx in range(matrix.shape[1]):
-            ax.text(col_idx, row_idx, int(matrix[row_idx, col_idx]), ha="center", va="center", color="black")
+    annotate_confusion_matrix(ax, matrix)
 
     save_figure(fig, output_path, manifest_entries, title, f"Confusion matrix for {title.lower()}.", dpi)
 
@@ -1835,7 +1972,14 @@ def plot_known_gate_tradeoff(
     title,
     dpi,
 ):
-    candidates = v3_train.build_confidence_candidates(known_confidences, unknown_confidences)
+    candidate_parts = [np.linspace(0.0, 1.0, 101)]
+    for values in [known_confidences, unknown_confidences]:
+        values = np.asarray(values, dtype=np.float64)
+        if values.size == 0:
+            continue
+        candidate_parts.append(np.percentile(values, v3_train.PERCENTILE_CANDIDATES))
+        candidate_parts.append(np.quantile(values, np.linspace(0.0, 1.0, 201)))
+    candidates = np.unique(np.concatenate(candidate_parts))
     if candidates.size == 0:
         return
 
@@ -1883,11 +2027,7 @@ def plot_family_confusion_matrix(known_targets, known_predictions, label_names, 
     ax.set_xlabel("Predicted family")
     ax.set_ylabel("True family")
     ax.set_title(title)
-    for row_idx in range(matrix.shape[0]):
-        for col_idx in range(matrix.shape[1]):
-            if matrix[row_idx, col_idx] == 0:
-                continue
-            ax.text(col_idx, row_idx, int(matrix[row_idx, col_idx]), ha="center", va="center", color="black", fontsize=8)
+    annotate_confusion_matrix(ax, matrix, fontsize=8, skip_zero=True)
 
     save_figure(fig, output_path, manifest_entries, title, f"Confusion matrix across known attack families for {title.lower()}.", dpi)
 
@@ -2058,6 +2198,43 @@ def format_bootstrap_interval(metric_summary):
     lower = format_metric_value(metric_summary.get("lower", float("nan")))
     upper = format_metric_value(metric_summary.get("upper", float("nan")))
     return f"[{lower}, {upper}] (valid bootstrap samples={int(metric_summary.get('valid_samples', 0))})"
+
+
+def append_family_metrics_table(lines, heading, metrics_by_label, include_coverage=False):
+    if not metrics_by_label:
+        return
+
+    lines.append(heading)
+    if include_coverage:
+        lines.append("| Family | Support | Accepted support | Coverage | Precision | Recall | F1 | PR-AUC | ROC-AUC |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for family_name, metrics in metrics_by_label.items():
+            lines.append(
+                f"| {family_name} | "
+                f"{int(metrics.get('support', 0))} | "
+                f"{int(metrics.get('accepted_support', 0))} | "
+                f"{format_metric_value(metrics.get('coverage', float('nan')))} | "
+                f"{format_metric_value(metrics.get('precision', float('nan')))} | "
+                f"{format_metric_value(metrics.get('recall', float('nan')))} | "
+                f"{format_metric_value(metrics.get('f1', float('nan')))} | "
+                f"{format_metric_value(metrics.get('pr_auc', float('nan')))} | "
+                f"{format_metric_value(metrics.get('roc_auc', float('nan')))} |"
+            )
+    else:
+        lines.append("| Family | Support | Predicted | Precision | Recall | F1 | PR-AUC | ROC-AUC |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for family_name, metrics in metrics_by_label.items():
+            lines.append(
+                f"| {family_name} | "
+                f"{int(metrics.get('support', 0))} | "
+                f"{int(metrics.get('predicted_count', 0))} | "
+                f"{format_metric_value(metrics.get('precision', float('nan')))} | "
+                f"{format_metric_value(metrics.get('recall', float('nan')))} | "
+                f"{format_metric_value(metrics.get('f1', float('nan')))} | "
+                f"{format_metric_value(metrics.get('pr_auc', float('nan')))} | "
+                f"{format_metric_value(metrics.get('roc_auc', float('nan')))} |"
+            )
+    lines.append("")
 
 
 def write_markdown_summary(summary, output_path):
@@ -2248,10 +2425,38 @@ def write_markdown_summary(summary, output_path):
     raw_known_accuracy = summary["known_family_accuracy"]
     if raw_known_accuracy is not None:
         lines.append(f"- Raw known-family accuracy: {raw_known_accuracy:.6f}" if raw_known_accuracy == raw_known_accuracy else "- Raw known-family accuracy: n/a")
+    raw_known_macro_f1 = summary.get("known_family_macro_f1")
+    if raw_known_macro_f1 is not None:
+        lines.append(
+            f"- Raw known-family macro F1: {raw_known_macro_f1:.6f}"
+            if raw_known_macro_f1 == raw_known_macro_f1
+            else "- Raw known-family macro F1: n/a"
+        )
     gate_metrics = summary["known_gate_at_validation_threshold"]
     lines.append(f"- Accepted known-family accuracy: {gate_metrics['accepted_accuracy']:.6f}" if gate_metrics["accepted_accuracy"] == gate_metrics["accepted_accuracy"] else "- Accepted known-family accuracy: n/a")
+    accepted_known_macro_f1 = summary.get("known_family_accepted_macro_f1")
+    if accepted_known_macro_f1 is not None:
+        lines.append(
+            f"- Accepted known-family macro F1: {accepted_known_macro_f1:.6f}"
+            if accepted_known_macro_f1 == accepted_known_macro_f1
+            else "- Accepted known-family macro F1: n/a"
+        )
     lines.append(f"- Known-family coverage: {gate_metrics['known_coverage']:.6f}" if gate_metrics["known_coverage"] == gate_metrics["known_coverage"] else "- Known-family coverage: n/a")
     lines.append(f"- Family-gate unknown recall: {gate_metrics['unknown_recall']:.6f}" if gate_metrics["unknown_recall"] == gate_metrics["unknown_recall"] else "- Family-gate unknown recall: n/a")
+    lines.append("")
+
+    append_family_metrics_table(
+        lines,
+        "### Raw Known-Family Metrics By Label",
+        summary.get("known_family_metrics_by_label") or {},
+        include_coverage=False,
+    )
+    append_family_metrics_table(
+        lines,
+        "### Accepted Known-Family Metrics By Label",
+        summary.get("known_family_accepted_metrics_by_label") or {},
+        include_coverage=True,
+    )
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2311,6 +2516,7 @@ def main():
     print(f"Future horizons minutes: {checkpoint_bundle['future_horizons_minutes']}", flush=True)
 
     manifest_entries = []
+    profiled_splits = list(dict.fromkeys(["train", *args.splits]))
 
     history_df = load_epoch_history(checkpoint_dir, device)
     if not history_df.empty:
@@ -2328,7 +2534,7 @@ def main():
 
     print("Building split profiles...", flush=True)
     split_profiles = {}
-    for split_name in ["train", *args.splits]:
+    for split_name in profiled_splits:
         print(f"Profiling split: {split_name}", flush=True)
         split_profiles[split_name] = build_dataset_profile(split_name, checkpoint_bundle)
 
@@ -2363,7 +2569,7 @@ def main():
 
     feature_shift_frames = {
         split_name: sample_continuous_rows(split_name, args.feature_shift_sample_rows, cont_features)
-        for split_name in ["train", *args.splits]
+        for split_name in profiled_splits
     }
     plot_feature_shift(
         feature_shift_frames,
@@ -2384,6 +2590,7 @@ def main():
             calibration_bins=args.calibration_bins,
             bootstrap_samples=args.bootstrap_samples,
             bootstrap_seed=args.bootstrap_seed,
+            progress_log_interval=args.progress_log_interval,
         )
         if payload is None:
             print(f"Skipping missing split: {split_name}")
@@ -2403,6 +2610,7 @@ def main():
         write_markdown_summary(summary, output_dir / f"{summary_prefix}.md")
         print(f"[{split_name}] Wrote summary artifacts: {summary_prefix}.json/.md", flush=True)
         print(f"[{split_name}] Rendering split figures...", flush=True)
+        print(f"[{split_name}] Rendering present-attack figures...", flush=True)
 
         current_metrics = summary["current_at_validation_threshold"]
         plot_binary_curves(
@@ -2456,6 +2664,7 @@ def main():
 
         ood_metrics = summary["ood_at_validation_threshold"]
         if ood_metrics is not None:
+            print(f"[{split_name}] Rendering unknown-risk figures...", flush=True)
             plot_binary_curves(
                 arrays["ood_labels"],
                 arrays["ood_probabilities"],
@@ -2506,10 +2715,13 @@ def main():
             )
 
         if checkpoint_bundle["future_task_enabled"] and summary["future_at_validation_threshold"] is not None:
+            print(f"[{split_name}] Rendering future-warning figures...", flush=True)
             for horizon_idx, horizon_label in enumerate(summary.get("future_horizon_labels", [])):
                 horizon_metrics = summary.get("future_at_validation_threshold_by_horizon", {}).get(horizon_label)
                 if horizon_metrics is None:
                     continue
+
+                print(f"[{split_name}] Rendering future horizon {horizon_label}...", flush=True)
 
                 horizon_threshold = applied_thresholds["future"][horizon_label]
                 horizon_scores = arrays["future_probabilities"][:, horizon_idx]
@@ -2577,6 +2789,7 @@ def main():
                     args.dpi,
                 )
 
+        print(f"[{split_name}] Rendering family and known-gate figures...", flush=True)
         plot_known_gate_tradeoff(
             arrays["known_current_probabilities"],
             arrays["known_confidences"],
@@ -2617,6 +2830,8 @@ def main():
             args.dpi,
         )
         print(f"[{split_name}] Figure export complete.", flush=True)
+        del payload
+        release_memory()
 
     write_manifest(manifest_entries, output_dir / "thesis_figure_manifest.md")
     print(f"Generated {len(manifest_entries)} figure entries.")

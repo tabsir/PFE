@@ -1,0 +1,69 @@
+% Requires \usepackage{graphicx} for \resizebox.
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split benign vs malicious detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-benign-malicious}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\hline
+Split & PR-AUC & AUC & Precision & Recall & F1 & Benign FPR \\
+\hline
+Validation & 0.968867 & 0.991248 & 0.609041 & 0.963512 & 0.746326 & 0.059259 \\
+Test & 0.936335 & 0.983613 & 0.629222 & 0.929816 & 0.750541 & 0.053916 \\
+Test OOD & 0.969299 & 0.353647 & 0.985530 & 0.969678 & 0.977540 & 0.958549 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split family detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-family}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrr}
+\hline
+Split & Raw Known-Family Accuracy & Accepted Accuracy & Coverage & Family-Gate Unknown Recall \\
+\hline
+Validation & 0.070951 & 0.101644 & 0.036625 & 0.786408 \\
+Test & 0.214943 & 0.447691 & 0.077491 & 0.787678 \\
+Test OOD & n/a & n/a & n/a & 0.967139 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split zero-day detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-zero-day}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\hline
+Split & PR-AUC & AUC & Precision & Recall & F1 & Benign-and-Known FPR & Unknown Positives \\
+\hline
+Validation & 0.869778 & 0.998978 & 0.307692 & 0.990291 & 0.469505 & 0.002175 & 206 \\
+Test & 0.749851 & 0.998961 & 0.570655 & 0.999052 & 0.726396 & 0.004848 & 1055 \\
+Test OOD & 0.999975 & 0.998332 & 1.000000 & 0.838310 & 0.912044 & 0.000000 & 12994 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split future warning metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-future}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrrr}
+\hline
+Split & Macro PR-AUC & Macro AUC & Macro Precision & Macro Recall & Macro F1 & Macro Benign FPR & Valid Positives & 10m F1 & 15m F1 \\
+\hline
+Validation & 0.027109 & 0.799477 & 0.021001 & 0.601402 & 0.040551 & 0.082102 & 642 & 0.034296 & 0.046807 \\
+Test & 0.181272 & 0.973864 & 0.045511 & 0.934392 & 0.086737 & 0.100417 & 834 & 0.077002 & 0.096471 \\
+Test OOD & 0.213910 & 0.503067 & 0.000000 & 0.000000 & 0.000000 & 0.000000 & 40 & 0.000000 & 0.000000 \\
+\hline
+\end{tabular}%
+}
+\end{table}

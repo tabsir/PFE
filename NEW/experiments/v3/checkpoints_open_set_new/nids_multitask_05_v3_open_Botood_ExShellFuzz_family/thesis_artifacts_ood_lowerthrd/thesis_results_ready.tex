@@ -1,0 +1,148 @@
+% Requires \usepackage{graphicx}
+
+\subsection{Results for the Recall-Oriented Open-Set Operating Point}
+\label{sec:ood-lowerthrd-results}
+
+This section reports the results obtained for the recall-oriented operating point defined by a present-attack threshold of $0.5$ and an unknown-risk threshold of $0.003$. This configuration was chosen to prioritize sensitivity to both current attacks and held-out attack families, while preserving the same family-gate and future-warning thresholds selected on validation. The results therefore reflect a deliberate trade-off: higher recall for present detection and zero-day detection is obtained at the cost of lower precision and a more aggressive response under distribution shift.
+
+\subsubsection{Distribution Shift Across Splits}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/feature_mean_shift_across_splits.png}}
+\caption{Feature mean shift across train, test, and test\_ood splits. The held-out-family test\_ood split exhibits clear deviations in several high-activity traffic features, confirming that the open-set benchmark introduces a real distribution shift beyond ordinary train-test variation.}
+\label{fig:ood-lowerthrd-feature-shift}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-feature-shift} compares the mean values of the most active continuous traffic features across the train, test, and test\_ood splits. The ordinary test split remains relatively close to the training distribution, whereas test\_ood shows clear deviations in throughput-related variables, TCP window maxima, and flow duration features. This confirms that the held-out-family benchmark is not simply a class split, but also a distribution-shifted setting. As a result, performance on test\_ood should be interpreted as a genuine open-set generalization result rather than a standard in-distribution evaluation.
+
+\subsubsection{Training Stability and Checkpoint Selection}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/v3_validation_overview.png}}
+\caption{Validation overview across refinement epochs, showing the stability of present-attack detection, unknown-risk detection, and family acceptance metrics, together with the weaker performance of the future-warning task.}
+\label{fig:ood-lowerthrd-validation-overview}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-validation-overview} summarizes the validation behaviour of the multitask model across the refinement stage. Present-attack detection remains highly stable across epochs, with current PR-AUC near $0.97$ and a consistently strong F1 score under the validation-selected threshold. Unknown-risk detection is also stable and remains close to saturation, whereas the future-warning PR-AUC stays much lower throughout training. This pattern indicates that the final checkpoint is not selected because of an isolated spike in one epoch; instead, it reflects a robust model for present detection and zero-day detection, while future warning remains the least mature task.
+
+\subsubsection{Present-Attack Detection on the In-Distribution Test Split}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/test_current_curves.png}}
+\caption{Precision-recall and ROC curves for present attack detection on the in-distribution test split. The model achieves strong ranking performance, indicating reliable discrimination between benign and attack traffic under ordinary test conditions.}
+\label{fig:ood-lowerthrd-test-current-curves}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-test-current-curves} presents the precision-recall and ROC curves for the benign-vs-malicious task on the in-distribution test split. The model achieves $\mathrm{PR\mbox{-}AUC}=0.936$ and $\mathrm{ROC\mbox{-}AUC}=0.984$, which indicates strong ranking quality over a wide range of thresholds. This result is consistent with the thresholded operating point reported in Table~\ref{tab:ood-lowerthrd-benign-malicious}, where the lowered decision threshold emphasizes recall ($0.930$) while maintaining a reasonable F1 score ($0.751$). Overall, the figure shows that the present-attack head remains effective when evaluation stays close to the training distribution.
+
+\subsubsection{Zero-Day Detection on Held-Out Families}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/test_ood_ood_curves.png}}
+\caption{Precision-recall and ROC curves for unknown-risk detection on the held-out test\_ood split. The explicit unknown-risk head shows near-perfect ranking performance, demonstrating strong separation between known-or-benign traffic and held-out attack families.}
+\label{fig:ood-lowerthrd-test-ood-ood-curves}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-test-ood-ood-curves} shows the precision-recall and ROC curves for zero-day detection on the held-out-family test\_ood split. The unknown-risk branch achieves near-perfect ranking performance with $\mathrm{PR\mbox{-}AUC}=0.999975$ and $\mathrm{ROC\mbox{-}AUC}=0.998332$, indicating extremely strong separation between unknown-labelled attack traffic and the non-unknown reference set. This result is the clearest evidence that the open-set component of the model generalizes beyond the families used for supervised training. Even under the aggressive recall-oriented threshold setting used in this artifact, the OOD head remains highly reliable and constitutes the strongest result of the full multitask system.
+
+\subsubsection{Failure of the Closed-Set Present-Attack Head Under OOD Shift}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/test_ood_current_curves.png}}
+\caption{Precision-recall and ROC curves for present attack detection on the held-out test\_ood split. Despite a high PR-AUC, the ROC curve collapses, revealing that the closed-set present-attack head is not robust under OOD shift.}
+\label{fig:ood-lowerthrd-test-ood-current-curves}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-test-ood-current-curves} highlights an important failure mode of the closed-set present-attack head on the test\_ood split. While the precision-recall curve remains high because the split is dominated by attack windows, the ROC-AUC falls to $0.354$, which indicates poor ranking quality and effectively inverted discrimination behaviour under distribution shift. This apparent contradiction is resolved by the confusion statistics in Table~\ref{tab:ood-lowerthrd-benign-malicious}, which show a very high benign false-positive rate at the selected threshold. Therefore, the figure demonstrates that strong open-set performance does not come from the present-attack head alone; it depends on the dedicated unknown-risk pathway.
+
+\subsubsection{Future Warning Under OOD Shift}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{\detokenize{/home/aka/PFE-code/NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_ood_lowerthrd/figures/test_ood_future_15m_curves.png}}
+\caption{Precision-recall and ROC curves for 15-minute future warning on the held-out test\_ood split. Future forecasting degrades substantially under OOD shift and does not provide a usable warning signal at the selected threshold.}
+\label{fig:ood-lowerthrd-test-ood-future-15m-curves}
+\end{figure}
+
+Figure~\ref{fig:ood-lowerthrd-test-ood-future-15m-curves} reports the 15-minute future-warning curves on the held-out test\_ood split. In contrast to the strong zero-day detection result, the future-warning head generalizes poorly under this shift, with $\mathrm{PR\mbox{-}AUC}=0.228908$ and $\mathrm{ROC\mbox{-}AUC}=0.473239$. The thresholded evaluation in Table~\ref{tab:ood-lowerthrd-future} confirms this weakness, as the deployed operating point yields zero precision, zero recall, and zero F1 on this split. This result suggests that early warning of future attacks remains the least transferable task in the multitask setting and requires further work in both representation learning and threshold design.
+
+\subsubsection{Family Detection}
+
+Family attribution remained the weakest closed-set classification component of the pipeline and is best summarized numerically rather than visually for this artifact. On the test split, raw known-family accuracy reached $0.2149$, while accepted known-family accuracy increased to $0.4477$ at the cost of low coverage ($0.0775$), showing that the model makes useful family assignments only on a restricted subset of confident cases. On test\_ood, family metrics are not applicable because the split is composed of held-out attack families, so the correct behaviour is rejection rather than assignment to a known class. For this reason, the family-detection results are more clearly presented as a table than as a main-text figure.
+
+\subsubsection{Cross-Split Quantitative Summary}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split benign vs malicious detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-benign-malicious}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\hline
+Split & PR-AUC & AUC & Precision & Recall & F1 & Benign FPR \\
+\hline
+Validation & 0.968867 & 0.991248 & 0.609041 & 0.963512 & 0.746326 & 0.059259 \\
+Test & 0.936335 & 0.983613 & 0.629222 & 0.929816 & 0.750541 & 0.053916 \\
+Test OOD & 0.969299 & 0.353647 & 0.985530 & 0.969678 & 0.977540 & 0.958549 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split family detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-family}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrr}
+\hline
+Split & Raw Known-Family Accuracy & Accepted Accuracy & Coverage & Family-Gate Unknown Recall \\
+\hline
+Validation & 0.070951 & 0.101644 & 0.036625 & 0.786408 \\
+Test & 0.214943 & 0.447691 & 0.077491 & 0.787678 \\
+Test OOD & n/a & n/a & n/a & 0.967139 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split zero-day detection metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-zero-day}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrr}
+\hline
+Split & PR-AUC & AUC & Precision & Recall & F1 & Benign-and-Known FPR & Unknown Positives \\
+\hline
+Validation & 0.869778 & 0.998978 & 0.307692 & 0.990291 & 0.469505 & 0.002175 & 206 \\
+Test & 0.749851 & 0.998961 & 0.570655 & 0.999052 & 0.726396 & 0.004848 & 1055 \\
+Test OOD & 0.999975 & 0.998332 & 1.000000 & 0.838310 & 0.912044 & 0.000000 & 12994 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-split future warning metrics for the OOD lower-threshold artifact.}
+\label{tab:ood-lowerthrd-future}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrrr}
+\hline
+Split & Macro PR-AUC & Macro AUC & Macro Precision & Macro Recall & Macro F1 & Macro Benign FPR & Valid Positives & 10m F1 & 15m F1 \\
+\hline
+Validation & 0.027109 & 0.799477 & 0.021001 & 0.601402 & 0.040551 & 0.082102 & 642 & 0.034296 & 0.046807 \\
+Test & 0.181272 & 0.973864 & 0.045511 & 0.934392 & 0.086737 & 0.100417 & 834 & 0.077002 & 0.096471 \\
+Test OOD & 0.213910 & 0.503067 & 0.000000 & 0.000000 & 0.000000 & 0.000000 & 40 & 0.000000 & 0.000000 \\
+\hline
+\end{tabular}%
+}
+\end{table}
+
+Taken together, these results show that the lowered thresholds successfully turn the model into a high-recall detector for present attacks and unknown attack families on validation and test, while also exposing the limitations of the closed-set present-attack head and the future-warning head under genuine open-set shift. The strongest result of the entire configuration is the unknown-risk detector on test\_ood, whereas the weakest component remains future warning, especially under held-out-family distribution shift.

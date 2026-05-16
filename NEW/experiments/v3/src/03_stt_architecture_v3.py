@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def build_fixed_spatial_mask(batch_size, seq_len, mask_ratio, device, seed):
+def build_fixed_spatial_mask(batch_size, seq_len, mask_ratio, device, seed): #mae and mfm mask builder
     generator = torch.Generator(device="cpu")
     generator.manual_seed(int(seed))
     return (torch.rand(batch_size, seq_len, generator=generator) < float(mask_ratio)).to(device)
@@ -102,7 +102,7 @@ def resolve_unknown_risk_probabilities(
     return combine_unknown_scores(raw_unknown_probabilities, reconstruction_probabilities)
 
 
-def compute_combined_reconstruction_outputs(
+def compute_combined_reconstruction_outputs( #mae + mfm reconstruction outputs combiner with flexible modes
     model,
     cont_data,
     cat_data,
@@ -183,7 +183,7 @@ class HybridEmbedding(nn.Module):
         x_fused = torch.cat([x_cont] + x_cats, dim=-1)
         return self.fusion_layer(x_fused)
 
-class FrequencyMaskingLayer(nn.Module):
+class FrequencyMaskingLayer(nn.Module): #  mfm layer
     def __init__(self, mask_ratio=0.10):
         super().__init__()
         self.mask_ratio = mask_ratio
@@ -206,7 +206,7 @@ class FrequencyMaskingLayer(nn.Module):
         
         return torch.fft.irfft(x_masked_freq, n=x.shape[1], dim=1, norm='ortho')
 
-class SpatioTemporalTransformer(nn.Module):
+class SpatioTemporalTransformer(nn.Module): # stt parameters layer and head 
     def __init__(self, num_cont_features, cat_vocab_sizes, seq_len=32, d_model=256, n_heads=8, n_layers=4, init_mae=0.30, init_mfm=0.10):
         super().__init__()
         self.d_model = d_model
@@ -233,7 +233,7 @@ class SpatioTemporalTransformer(nn.Module):
             nn.Linear(d_model // 2, num_cont_features)
         )
 
-    def encode_features(self, cont_data, cat_data, spatial_mask=None, apply_mfm=None):
+    def encode_features(self, cont_data, cat_data, spatial_mask=None, apply_mfm=None):  #mae a application
         batch_size, seq_len, _ = cont_data.shape
 
         x = self.embedding(cont_data, cat_data)
@@ -295,14 +295,14 @@ class NIDSMultiTaskModel(nn.Module):
             nn.GELU(),
             nn.Dropout(dropout),
         )
-        self.current_attack_head = nn.Linear(backbone.d_model, 1)
-        self.future_attack_head = (
+        self.current_attack_head = nn.Linear(backbone.d_model, 1) #current attack head
+        self.future_attack_head = (   #future attack head
             nn.Linear(backbone.d_model, self.num_future_horizons)
             if self.num_future_horizons > 0
             else None
         )
-        self.unknown_attack_head = nn.Linear(backbone.d_model, 1) if use_ood_head else None
-        self.attack_family_head = (
+        self.unknown_attack_head = nn.Linear(backbone.d_model, 1) if use_ood_head else None #unknown attack head (OOD)
+        self.attack_family_head = ( # familly attack clasification head
             nn.Linear(backbone.d_model, num_known_attack_classes)
             if num_known_attack_classes > 0
             else None
@@ -380,7 +380,7 @@ class NIDSMultiTaskModel(nn.Module):
         current_threshold=0.50,
         known_attack_threshold=0.55,
         future_threshold=0.50,
-        ood_threshold=0.50,
+        ood_threshold=0.50, #hada novelty alarm
         future_horizons_minutes=None,
         reconstruction_calibration=None,
         hybrid_ood_threshold=None,
