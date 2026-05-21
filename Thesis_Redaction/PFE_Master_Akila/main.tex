@@ -1,0 +1,1288 @@
+\documentclass[12pt, a4paper]{report}
+
+% Essential Packages
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[utf8]{inputenc}
+\usepackage{fontenc}
+\usepackage[english]{babel}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx} % Added for better table formatting
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{csquotes}
+\usepackage[style=ieee, backend=bibtex]{biblatex} 
+% Bibliography Resource
+\addbibresource{references.bib}
+\usepackage{float}
+
+% Geometry Settings
+\geometry{
+    top=2cm,
+    bottom=2cm,
+    left=1.5cm,
+    right=1.5cm
+}
+% Graphics Path - ESSENTIAL for finding your pictures
+\graphicspath{ {./images/} }
+
+ % Hyperref Setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=magenta,      
+    urlcolor=blue,
+    citecolor=blue,
+    pdftitle={Spatio-Temporal Foundation Model for NIDS},
+    pdfpagemode=FullScreen,
+}
+
+\begin{document}
+
+% -------------------------------------------------------------------
+% TITLE PAGE
+% -------------------------------------------------------------------
+\begin{titlepage}
+    \begin{center}
+        \linespread{1}
+        \small
+        \textbf{République Algérienne Démocratique et Populaire}\\
+        
+        \vspace{0.2cm}
+        \textbf{Ministère de l'Enseignement Supérieur et de la Recherche Scientifique}\\
+       
+        \vspace{0.2cm}
+        
+        \textbf{École Supérieure en Informatique 8 Mai 1945 Sidi Bel Abbès}\\
+
+       \begin{figure}[H]
+           \centering
+           \includegraphics[width=0.28\linewidth]{images/logo-esi.jpg}
+           \label{fig:placeholder}
+       \end{figure}
+        \vspace{0.3cm}
+        
+        
+        
+        {\Huge \textbf{Master Thesis}}\\[0.5cm] 
+        {\large \textbf{Degree}}\\[0.2cm] 
+        \textbf{Field:} Computer Science\\
+        \textbf{Specialty:} ISI\\[1cm]
+        
+        \large \textbf{Theme}\\
+        \vspace{0.2cm}
+        
+        \rule{\linewidth}{0.5mm} \\[0.4cm]
+        {\Large \bfseries Spatio-Temporal Foundation Model for Network Intrusion Detection Systems (NIDS) (Self-Supervised Zero-Day Detection via Hybrid Masked Transformers)} \\[0.4cm]
+        \rule{\linewidth}{0.5mm} \\[1.5cm]
+        
+        \begin{minipage}{0.4\textwidth}
+            \begin{flushleft} \large
+                \textbf{Presented by:}\\
+                CHIALI Akila
+            \end{flushleft}
+        \end{minipage}
+        \hfill
+        \begin{minipage}{0.4\textwidth}
+            \begin{flushright} \large
+                \textbf{Submission Date:}\\
+                June 2026 
+            \end{flushright}
+        \end{minipage}
+        
+        \vspace{1.5cm}
+        \textbf{In front of the jury composed of:}\\[0.5cm]
+        \begin{tabular}{l l l}
+            Dr. BENDAOUD Fayssal & Supervisor & \\
+            Dr. Houari  BOUMEDIENE &   Examiner & \\
+        \end{tabular}
+        
+        \vfill
+        \textbf{Academic Year: 2025-2026 }
+    \end{center}
+\end{titlepage}
+
+\part*{Acknowledgements}
+
+\addcontentsline{toc}{part}{Acknowledgements}
+
+
+\newpage
+
+% -------------------------------------------------------------------
+% ABSTRACT
+% -------------------------------------------------------------------
+\part*{Abstract}
+\addcontentsline{toc}{part}{Abstract}
+
+
+Nowadays, the cybersecurity field is facing a significant dilemma caused by the exponential evolution of cyber threat vectors. The emergence of AI-driven intrusion techniques, has rendered traditional detection frameworks increasingly insufficient. Consequently, identifying malicious intent now requires more than simple pattern recognition; it demands a deep understanding of the underlying dynamics of network communication, moving beyond the mere detection of static signatures.
+
+This thesis proposes a robust \textbf{Network Intrusion Detection System (NIDS)} built upon the complexity of packet flow analogies. By leveraging \textbf{Hybrid Masked Spatio-Temporal Transformers}, we redefine network traffic as a spatio-temporal volume. Unlike classical models, our approach utilizes self-supervised learning to capture the joint evolution of internal packet structures (spatial) and flow sequences (temporal). 
+
+Through this architecture, the model achieves a profound understanding of both historical attack patterns and "New" unobserved exploits. By mastering the fundamental "grammar" of the network, the proposed system provides not only a solution to detect known attacks through their signatures but also promises a scalable and adaptive resolution for \textbf{Zero-Day detection}, bridging the gap between high-capacity computational scaling and the complex nuances of modern cybersecurity.
+
+\vspace{1cm}
+\textbf{\textit{Keywords:}} Spatio-Temporal Transformers, Masked Modeling, NIDS, Zero-Day Detection, Self-Supervised Learning..
+
+
+% -------------------------------------------------------------------
+% TABLE OF CONTENTS
+% -------------------------------------------------------------------
+\tableofcontents
+\listoftables
+\listoffigures
+
+% -------------------------------------------------------------------
+% LIST OF ACRONYMS
+% -------------------------------------------------------------------
+\part*{List of Acronyms}
+\addcontentsline{toc}{chapter}{List of Acronyms}
+
+\begin{longtable}{@{}p{2.5cm}p{12cm}@{}}
+\toprule
+\textbf{Acronym} & \textbf{Definition} \\
+\midrule
+\endhead
+
+AI & Artificial Intelligence \\
+ANN & Artificial Neural Network \\
+APT &  Advanced Persistent Threat \\
+AUC & Area Under the Curve \\
+BERT & Bidirectional Encoder Representations from Transformers \\
+BiLSTM & Bidirectional Long Short-Term Memory \\
+B5G & Beyond Fifth Generation\\
+CNN & Convolutional Neural Network \\
+DDoS & Distributed Denial of Service \\
+DL & Deep Learning \\
+FFN & Feed-Forward Network \\
+FPR & False Positive Rate \\
+GELU & Gaussian Error Linear Unit \\
+HM-STT & Hybrid Masked Spatio-Temporal Transformer \\
+IDS & Intrusion Detection System \\
+IoT & Internet of Things \\
+LSTM & Long Short-Term Memory \\
+MAE & Masked Autoencoder \\
+MFM & Masked Flow Modeling \\
+MHA & Multi-Head Attention \\
+ML & Machine Learning \\
+NIDS & Network Intrusion Detection System \\
+NLP & Natural Language Processing \\
+PCAP & Packet Capture \\
+PE & Positional Encoding \\
+ReLU & Rectified Linear Unit \\
+RNN & Recurrent Neural Network \\
+SLAD & Scale Learning-based Deep Anomaly Detection \\
+SSL & Self-Supervised Learning \\
+STT  & Spatio Temporal Transformer \\
+ViT & Vision Transformer \\
+
+\bottomrule
+\end{longtable}
+
+% -------------------------------------------------------------------
+% PART 1: INTRODUCTION
+% -------------------------------------------------------------------
+\part{Introduction}
+
+\section*{General Introduction}
+
+The integration of digital systems into every facet of modern life has created an attack surface of unprecedented scale. As the world moves towards hyper-connectivity through 5G and B5G networks, the complexity of cyber threats has evolved \textbf{simultaneously with these technological advancements} \cite{sharafaldin2018toward}. Malicious actors now employ polymorphic malware and techniques that \textbf{abuse legitimate system tools already present in the operating system to carry out attacks}, allowing their activities to blend seamlessly with normal network traffic \cite{jordaney2017transcend}. In this adversarial environment, traditional signature-based Network Intrusion Detection Systems (NIDS) remain blind to Zero-Day attacks—exploits that target undisclosed vulnerabilities and possess no pre-existing signature \cite{buczak2016survey}.
+
+The cybersecurity community has increasingly turned to Artificial Intelligence (AI) to close this gap. Deep Learning (DL) models have demonstrated superior performance in identifying malware variants compared to classical Machine Learning (ML). However, the dominant paradigm of Supervised Learning faces diminishing returns due to the bottleneck of labeled data \cite{liu2024self} and ``concept drift,'' where the statistical properties of \textbf{legitimate and harmless network traffic} shift over time, leading to significant model degradation \cite{gama2014survey}.
+
+This thesis argues that the solution lies in \textbf{Self-Supervised Learning (SSL)} and the development of \textbf{Foundation Models} for network traffic. Drawing inspiration from NLP and Computer Vision \cite{vaswani2017attention, he2022masked}, we propose that network traffic should be treated as a \textbf{Spatio-Temporal} signal. Traffic flows exhibit ``spatial'' structure within a packet's content and ``temporal'' dependencies across the sequence of packets \cite{lin2022etbert}. Existing approaches have largely treated these dimensions in \textbf{isolation}, either converting flows to static 2D images (losing temporal granularity) \textbf{or} treating them as simple 1D sequences, often introducing unnecessary computational redundancy \cite{luis2024no}.
+
+Architectures based on Spatio-Temporal Transformers (STT) demonstrate significantly superior performance compared to traditional recurrent prediction models across several application domains. Analyzing network traffic requires the simultaneous evaluation of spatial network topology and temporal packet flows, similar to tracking human joints \cite{aksan2020spatio} or heterogeneous vehicles in sequence data \cite{s2tnet2021}. This research bridges these domains to build a resilient, adaptive defense mechanism for modern network infrastructures.
+
+
+\section*{Motivation}
+Among the numerous studies demonstrating the effectiveness of Spatio-Temporal Transformers (STT), we focused on two fundamental architectures below, which serve as the foundation for our proposed Hybrid Masked Spatio-Temporal Transformer (HM-STT). 
+
+\begin{itemize}
+    \item 
+In the first study~\cite{aksan2020spatio} published in 2020 for Human Motion Prediction . the Spatio-Temporal Transformer is designed to model structured sequential data by separating spatial relationships from temporal dynamics. In many sequence prediction problems, it is necessary to capture both spatial dependencies, which describe the relationships between elements within the same time step, and temporal dependencies, which describe how these elements evolve over time.
+
+Traditional Recurrent Neural Networks (RNNs) process sequences sequentially and often suffer from exposure bias and error accumulation when predicting long sequences. Small prediction errors may propagate through time, leading to progressively degraded outputs.
+
+By jointly modeling spatial structure and temporal evolution, the ST-Transformer can effectively capture long-term dependencies while preserving structural consistency. Experimental results affirm that  ST-Transformer model, achieved the best performances compared to other models in the 3D human motion prediction study on the AMASS dataset \cite{AMASS:2019}.
+
+%\begin{figure}[H]
+ %   \centering
+  %  \includegraphics[width=1.1\linewidth]{3D image motion prediction comparative.png}
+   % \caption{Results on \textbf{AMASS} dataset are reported using Euler, Joint Angle, and Positional errors (lower is better) and Area Under the Curve (AUC, higher is better). The best value in each column is highlighted in bold, the second best is underlined. All errors are averaged over the sequence, and positional errors are expressed in millimeters. ST-Transformer refers to our model, and an asterisk (*) indicates models re-evaluated by us after hyper-parameter tuning. \cite{aksan2020spatio} }
+   % \label{fig:AMASS}
+%\end{figure}
+
+
+\item Next study \cite{s2tnet2021} the S2TNet framework utilizes STTs to predict the trajectories of heterogeneous traffic agents for highly dynamic environments (e.g., vehicles, pedestrians, cyclists). S2TNet relies on a spatial transformer to capture the complex topological interactions among all agents, moving beyond simple spatial neighborhood heuristics. Simultaneously, a temporal transformer enhances the modeling of dependencies to output future trajectories autoregressively. S2TNet reduces the Average Displacement Error compared to other baseline models, it proves that STTs are exceptionally capable of handling heterogeneous, dense, and non-holonomic interactions.
+
+
+ % \begin{figure}[H]
+%  \centering
+% \includegraphics[width=1\linewidth]{S2TNet comparison model motivation .png}
+  % \caption{Comparison with baselines models on ApolloScape Trajectory dataset\cite{s2tnet2021}.}
+  %  \label{fig:S2TNet}
+% \end{figure}
+
+
+
+The success of these architectures provides a strong theoretical basis for applying STTs to Intrusion Detection Systems (IDS). Network traffic is inherently heterogeneous and spatio-temporal, making it well-suited for decoupled attention mechanisms. The ST-Transformer demonstrates that exploiting spatial and temporal attention eliminates the error accumulation seen in RNNs when monitoring long sequences~\cite{aksan2020spatio}, which is essential for tracking prolonged Advanced Persistent Threats (APTs). By adapting these efficiency mechanisms, our proposed model can process \textbf{Large Scale}  dense network  in real time. Treating network logs as spatio-temporal signals allows the model to capture complexe signatures of zero-day attacks without relying on static 2D image conversions or isolated 1D sequential models.
+\end{itemize} 
+\section*{Problem Statement}
+Current Machine Learning-based NIDS architectures face three critical challenges:
+\begin{enumerate}
+    \item \textbf{Dependency on Labeled Data:} Supervised systems are brittle against ``unknown unknowns.''
+    \item \textbf{Inefficient Representation:} CNNs are biased towards local features, while RNNs struggle with long-range dependencies. Converting packet data into 2D images introduces artificial correlations \cite{luisbisbe2024nopictures}.
+    \item \textbf{Lack of Generalization and adapatation :} Models trained on one network environment rarely transfer well to another.
+
+   
+\end{enumerate}
+
+\section*{Research Objectives}
+The primary objective is to develop a \textbf{Spatio-Temporal Foundation Model for NIDS} capable of detecting Zero-Day attacks without reliance on attack-specific training labels. Sub-objectives include:
+\begin{itemize}
+    \item \textbf{Tubelet Representation:} Transforming raw packets into 3D spatio-temporal ``tubelets'' \cite{bertasius2021space}.
+    \item \textbf{Hybrid Masked Architecture:} Implementing a Hybrid Masked Spatio-Temporal Transformer (HM-STT) utilizing a masked reconstruction pretext task.
+    \item \textbf{Zero-Day Evaluation:} Benchmarking against state-of-the-art frameworks.
+    \item \textbf{Accuracy and Efficiency:}  Maximizing detection accuracy, minimizing prediction error, and reducing computational complexity for real-time network monitoring.
+\end{itemize}
+
+% -------------------------------------------------------------------
+% CHAPTER 2: BACKGROUND
+% -------------------------------------------------------------------
+\part{Background}
+\chapter{Network Security and the Evolving Threat Landscape}
+
+
+
+\section{Architectural Framework of Intrusion Detection Systems}
+An Intrusion Detection System (IDS) is not a monolithic entity but a modular architecture designed to collect, process, and analyze data in real-time. According to the \textbf{Common Intrusion Detection Framework (CIDF)}, a robust IDS consists of four primary functional components:
+
+\begin{enumerate}
+    \item \textbf{The Sensor (E-box):} Responsible for the ingestion of raw network telemetry. In the context of NIDS, this involves capturing traffic via passive monitoring (e.g., Port Mirroring).
+    \item \textbf{The Analyzer (A-box):} The intelligence layer where the detection logic is applied. This thesis focuses on optimizing this component using a \textbf{Hybrid Masked Transformer} to identify anomalous spatio-temporal patterns.
+    \item \textbf{The Storage (D-box):} A repository for configuration data, learned behavioral baselines, and historical logs.
+    \item \textbf{The Manager (R-box):} The interface that translates the analyzer's findings into human-readable alerts or automated defensive actions.
+\end{enumerate}
+
+\subsection{Architectural Placement}
+The effectiveness of the IDS is highly dependent on its placement within the network topology. While \textbf{Host-based IDS (HIDS)} provide granular visibility into endpoint activities, \textbf{Network-based IDS (NIDS)} offer a broader view of the communication fabric, making them essential for detecting multi-stage APTs and Zero-Day exfiltration attempts \cite{khraisat2019survey}.
+
+
+\subsection{Intrusion Detection Paradigms}
+Intrusion Detection Systems (IDS) are categorized by their underlying detection logic. Selecting the appropriate paradigm is a trade-off between computational overhead and the ability to generalize to unseen threats.
+
+\begin{itemize}
+    \item \textbf{Signature-Based Detection (Knowledge-Based):} This deterministic approach relies on a database of predefined patterns or "fingerprints" of known malicious activity. While highly effective for preventing recurring threats with near-zero false positive rates, it remains fundamentally \textbf{blind to Zero-Day attacks} and polymorphic malware that lacks a prior signature .
+    
+    \item \textbf{Anomaly-Based Detection (Behavior-Based):} Instead of looking for "bad" patterns, this paradigm learns the statistical baseline of "normal" network behavior. Any significant deviation from this baseline is flagged as an intrusion. This is the primary domain of \textbf{Self-Supervised Learning}, as it allows for the detection of novel exploits, though it requires careful tuning to manage higher False Positive Rates (FPR) .
+    
+    \item \textbf{Specification-Based Detection:} This method defines a set of formal constraints and "correct" protocol behaviors (e.g., following RFC standards for TCP/IP). It flags any activity that violates these logical specifications. While robust, it is manually intensive to define and maintain for complex, evolving protocols .
+    
+    \item \textbf{Hybrid Detection:} Modern architectures, such as the one proposed in this thesis, often combine these methods. By integrating the speed of signature matching with the generalizability of anomaly-based transformers, hybrid systems maximize detection coverage while minimizing false alarms .
+\end{itemize}
+
+\subsection{Categorization of Network Attack Vectors}
+To evaluate the proposed model, we categorize the threats present in the dataset into five primary functional classes:
+
+\begin{table}[H]
+\centering
+\caption{Taxonomy of Common Network Attacks in NIDS Datasets.}
+\label{tab:attack_types}
+\begin{tabular}{@{}llp{8cm}@{}}
+\toprule
+\textbf{Category} & \textbf{Examples} & \textbf{Description} \\ \midrule
+\textbf{Denial of Service} & DoS, DDoS, Slowloris & Attempts to exhaust system resources (CPU, bandwidth) to render services unavailable. \\
+\textbf{Exfiltration} & Data Theft, Tunneling & The unauthorized transfer of sensitive data from the target network to an external C2 server. \\
+\textbf{Brute Force} & SSH-BF, FTP-BF & Systematic attempts to crack credentials through automated trial-and-error. \\
+\textbf{Web-Based} & SQLi, XSS, Brute Force & Exploiting vulnerabilities in web applications to gain unauthorized access or inject code. \\
+\textbf{Infiltration} & Backdoors, Exploits & Leveraging software vulnerabilities to gain a foothold inside a secure internal network. \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Zero-Day Exploits and Polymorphic Malware}
+A critical vulnerability in modern infrastructures is the rise of Zero-Day exploits attacks, that target software vulnerabilities completely unknown to the vendor and security community \cite{bilge2012before}. Because no patch or historical signature exists for a zero-day exploit, legacy systems are fundamentally blind to them. 
+
+Compounding this issue is the use of polymorphic and metamorphic malware \cite{szor2005art} . Attackers utilize automated generation tools that constantly alter the identifiable footprint (hashes, byte structures, and command-and-control IP addresses) of the malware payload. Consequently, organizations must implement robust, defense-in-depth strategies. Within this hyper-connected ecosystem, continuous monitoring and automated threat detection serve as the foundational backbone \cite{hairab2022anomaly}.
+
+\section{The Escalation of Network Complexity}
+The architectural complexity of modern digital infrastructures has expanded exponentially, driven by the proliferation of the Internet of Things (IoT), the deployment of Beyond Fifth Generation (B5G) communication networks, and the decentralization inherent in edge computing paradigms \cite{iot_security_2025}. This rapid expansion has elevated network security from a secondary operational concern to a critical imperative, as the attack surface has fundamentally expended \cite{ids_overview_2025}. With billions of inherently insecure IoT devices continuously transmitting data, the volume, velocity, and variety of network traffic have made human-led and traditionnal  network monitoring mathematically impossible.
+
+\subsection{Advanced Persistent Threats (APTs) and Lateral Movement}
+Modern adversaries no longer rely on singular, destructive events. Instead, the threat landscape is dominated by Advanced Persistent Threats (APTs) stealthy ,  continuous computer network attack processes orchestrated by highly resourced groups. APTs are characterized by their multi-stage nature: initial compromise, establishing a foothold, lateral movement across the network, and eventual data exfiltration \cite{alshamrani2019survey}. 
+
+Because APTs operate over extended temporal windows (often lying dormant for months), traditional security systems that evaluate network packets as isolated, 
+instant  events fail to detect the global malicious narrative. Detecting lateral movement requires a system capable of linking a suspicious login on one server (spatial feature) to anomalous data transfer days later (temporal feature)\cite{king2023euler}.
+
+\section{The Failure of Traditional NIDS}
+As networks grow in scale, traditional perimeter defenses such as static firewalls and legacy Network Intrusion Detection Systems (NIDS) are no longer sufficient \cite{rose2020zero}\cite{ahmad2021network}. 
+
+\subsection{Signature-Based vs. Anomaly-Based Detection}
+Historically, NIDS relied upon signature-based detection mechanisms (e.g., Snort, Suricata) \cite{roesch1999snort}. These systems operate by cross-referencing incoming packet payloads against a static database of known malware hashes. While computationally efficient---often operating with $\mathcal{O}(1)$ or $\mathcal{O}(n)$ complexity for pattern matching---this deterministic approach is structurally incapable of identifying zero-day vulnerabilities or polymorphic variations.
+
+To address the limitations of static signature matching, modern intrusion detection must shift toward anomaly-based deep learning paradigms. Introduced conceptually by Denning \cite{denning1987intrusion}, anomaly detection builds a baseline of ``normal'' network behavior and flags deviations. While anomaly detection has the theoretical capability to identify Zero-Day exploits, it historically suffers from high false-positive rates due to the unpredictable, shifting nature of legitimate network traffic.
+
+\subsection{The Challenge of Encrypted Traffic}
+Historically, NIDS relied heavily on Deep Packet Inspection (DPI) to parse the payload and search for malicious command strings. However, the ever-present adoption of cryptographic protocols (like TLS 1.3) has rendered the payload completely opaque to intermediate network sensors. Without the decryption keys, DPI is obsolete \cite{anderson2016machine}. 
+
+To maintain visibility, modern NIDS must pivot away from plaintext payload inspection. They must rely exclusively on analyzing the structural, spatial, and temporal patterns of the encrypted byte sequences, the packet headers, and the communication frequencies , necessitating the use of advanced deep representation learning.
+
+\subsection{The Base Rate Fallacy}
+The primary mathematical challenge in anomaly-based NIDS is the Base Rate Fallacy, formalized by Axelsson \cite{axelsson1999base} as : $$P(I|A) = \frac{P(A|I)P(I)}{P(A|I)P(I) + P(A|\neg I)P(\neg I)}$$ Where $P(I)$ is the base rate of intrusions, $P(\neg I)$ is the base rate of legitimate traffic, $P(A|I)$ is the true positive rate, and $P(A|\neg I)$ is the false positive rate. Because malicious packets represent an extremely small fraction of total global network traffic, even a highly accurate model with a apparent
+negligible false-positive rate (e.g, 1\%) will generate an overwhelming absolute number of false alarms. This phenomenon causes ``alert fatigue,'' rendering the NIDS practically unusable. Consequently, modern NIDS require foundation models capable of learning highly precise, to push the false-positive rate as close to zero as mathematically possible.
+\section{Network Traffic Analysis Granularity}
+To effectively detect the threats, it is necessary to establish the granularity at which network traffic is analyzed. Traditional systems often fail because they analyze data at the incorrect abstraction layer.
+
+\subsection{Packet-Level vs. Flow-Level Analysis}
+Network traffic can be fundamentally evaluated through two primary levels: individual packets or aggregated flows.
+\begin{itemize}
+    \item \textbf{Packet-Level Analysis (Deep Packet Inspection):} This approach examines the raw payload and headers of every single packet traversing the network. While it provides granular visibility into exploit signatures, it is highly computationally expensive, breaks down completely in the presence of encrypted traffic (e.g, TLS 1.3), and lacks context regarding the state of the connection.
+    \item \textbf{Flow-Level Analysis:} A network flow aggregates a sequence of packets sharing a common 5-tuple: Source IP, Destination IP, Source Port, Destination Port, and Protocol (TCP/UDP), captured over a predefined temporal window. Flow analysis records statistical metadata such as packet counts, byte volumes, inter-arrival times, and duration.
+\end{itemize}
+Modern Advanced Persistent Threats (APTs) are rarely identifiable via a single packet. Therefore, modeling network data requires a shift toward flow-level aggregation. Treating these flows as a continuous spatio-temporal signal allows deep learning models to observe the macro-behavior of an attack over time, rather than getting lost in the micro-noise of isolated, encrypted packets.
+
+\section{The Anatomy of Advanced Attacks}
+To understand why temporal modeling is mandatory for modern NIDS, cyber intrusions must be viewed through formalized, multi-stage frameworks rather than as isolated anomalies.
+
+\subsection{The Cyber Kill Chain Framework}
+The Lockheed Martin Cyber Kill Chain \cite{hutchins2011intelligence} models a cyberattack as a strict sequence of operational phases:
+\begin{enumerate}
+    \item \textbf{Reconnaissance:} The adversary gathers intelligence on the target architecture.
+    \item \textbf{Weaponization:} Creating a adapted malware payload.
+    \item \textbf{Delivery:} Transmitting the payload via vectors like phishing or drive-by downloads.
+    \item \textbf{Exploitation:} Triggering the vulnerability in the target system.
+    \item \textbf{Installation:} Establishing a persistent backdoor.
+    \item \textbf{Command and Control (C2):} Opening a bidirectional communications channel to the attacker's server.
+    \item \textbf{Actions on Objectives:} Lateral movement, privilege escalation, or data exfiltration.
+\end{enumerate}
+Traditional systems evaluate network packets as instantaneous events, missing the correlation between Phase 1 (reconnaissance port scans) on day one, and Phase 7 (exfiltration) weeks later. A Spatio-Temporal architecture is specifically designed to maintain this long-range temporal state, effectively mapping the entire kill chain as a single, extended anomaly.
+
+\section{Adversarial Evasion and AI Blindspots}
+As defense mechanisms have integrated artificial intelligence, attackers have simultaneously adopted Adversarial Machine Learning to actively bypass AI-driven boundaries \cite{biggio2018wild}. 
+
+Through adversarial perturbation, adversaries make minimal, constrained feature changes to their network traffic. These evasion techniques include:
+\begin{itemize}
+    \item \textbf{Packet Timing Manipulation:} Altering the inter-arrival times of packets to disguise automated C2 beacons as infrequent, human-generated web traffic.
+    \item \textbf{Dummy Byte Injection:} Padding payloads with randomized noise to shift statistical distributions (like byte entropy) away from known malware profiles.
+    \item \textbf{IP Spoofing and Fragmentation:} Breaking malicious payloads across multiple, out-of-order packets to evade spatial signature matching.
+\end{itemize}
+These perturbations preserve the semantic validity of the exploit while mathematically pushing the data outside a discriminative model's learned decision boundary. This underscores the vital need for generative architectures (like Masked Autoencoders) that can ignore adversarial noise and reconstruct the underlying structural truth.
+
+
+
+\chapter{Machine/Deep Learning: The Path to Spatio-Temporal Transformers}
+
+\section{Evolution of Neural Networks in Cybersecurity}
+The transition from manual signature writing to automated threat detection naturally adopted traditional deep learning models. However, evaluating these foundational building blocks reveals why the field is currently pivoting heavily toward Spatio-Temporal Transformers (STTs).
+
+\section{Recurrent Neural Networks (RNNs) and Temporal Limitations}
+RNNs and LSTMs were initially utilized for network traffic because they maintain a hidden state $h_t$ to model sequential data (e.g, a flow of packets). While effective for short sequences, they process data sequentially and suffer from the Vanishing Gradient Problem. In the context of cybersecurity, an APT might initiate a connection on day one and exfiltrate data on day thirty. Standard RNNs lack the capacity to capture these long-range dependencies without severe error accumulation.
+
+\section{Convolutional Neural Networks (CNNs) and Spatial Limitations}
+To overcome the slowness of RNNs, researchers attempted to convert network packets into 2D grayscale images, processing them with CNNs. CNNs utilize kernels to extract local spatial features. While highly effective for actual images, applying CNNs to network data assumes that adjacent bytes are highly correlated (like pixels). This forces an artificial spatial relationship onto network features that may not exist, while simultaneously completely ignoring the temporal evolution of the traffic flow.
+
+\section{Transformers and Attention Mechanisms}
+To resolve the bottlenecks of RNNs and the artificial constraints of CNNs, the focus shifted to the Transformer architecture, introduced in the seminal paper \textbf{“Attention Is All You Need” (2017) } \cite{vaswani2017attention}. The core idea behind transformers is the self-attention mechanism, which enables the model to weigh different parts of the input sequence globally, completely bypassing sequential processing constraints.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{./images/Transformers architechture from attention is all u need 2017 .png}
+    \caption{Model General Architecture \cite{vaswani2017attention}.}
+    \label{fig:Attention}
+\end{figure}
+
+\subsection{Encoder and Decoder Stacks}
+\subsubsection{Encoder}
+The encoder consists of $N = 6$ identical layers.  
+Each layer contains two sub-layers:
+\begin{itemize}
+    \item Multi-head self-attention mechanism
+    \item Position-wise fully connected feed-forward network (FFN)
+\end{itemize}
+
+Each sub-layer is wrapped with a residual connection followed by layer normalization:
+\begin{equation}
+\text{LayerNorm}(x + \text{Sublayer}(x))
+\end{equation}
+
+All sub-layers and embedding layers produce outputs of dimension $d_{\text{model}} = 512$.
+
+\subsubsection{Decoder}
+The decoder also consists of $N = 6$ identical layers.  
+Each layer contains three sub-layers:
+\begin{itemize}
+    \item Masked multi-head self-attention
+    \item Encoder-decoder attention
+    \item Position-wise feed-forward network
+\end{itemize}
+
+\paragraph{Note on Hyperparameter Configuration:} 
+It is critical to note that dimensions such as $N=6$, $d_{\text{model}}=512$, and $h=8$ represent the baseline configuration established by Vaswani et al. \cite{vaswani2017attention} for NLP. In modern architectural design, particularly for Spatio-Temporal NIDS, these values are treated as tunable hyperparameters rather than fixed constraints, optimized for network traffic features and other requirements.
+
+\subsection{Scaled Dot-Product Attention}
+The attention function operates on queries $Q$, keys $K$, and values $V$:
+\begin{equation}
+\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+\end{equation}
+Scaling by $\sqrt{d_k}$ prevents large dot products from pushing the softmax into regions with very small gradients.
+
+\subsection{Multi-Head Attention and Positional Encoding}
+Instead of performing a single attention function, queries, keys, and values are linearly projected $h$ times:
+\begin{equation}
+\text{MultiHead}(Q,K,V) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O
+\end{equation}
+Because the Transformer has no recurrence or convolution, positional information must be added to the embeddings using sinusoidal functions so the model can capture the sequential order of network packets.
+
+\section{Vision Transformers (ViT) as a Stepping Stone}
+While standard Transformers excelled at NLP, applying them to multidimensional matrices required the \textbf{Vision Transformer (ViT)} \cite{dosovitskiy2020vit}. ViT challenges the dominance of CNNs by treating 2D matrices as sequences of patches. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\linewidth]{./images/vitmodelarchitechrture2020animaheiswort16x16.png}
+    \caption{Model overview \cite{dosovitskiy2020vit} .}
+    \label{fig:ViT}
+\end{figure}
+
+The ViT model divides an input grid into non-overlapping 2D patches, flattening them into a sequence length $N = \frac{H \times W}{P^2}$. Similar to BERT \cite{devlin2019bert}, a \texttt{[class]} token is prepended to serve as the global representation. While ViT proves that self-attention can handle spatial matrices, adapting this strictly to 2D network anomaly detection still fundamentally ignores the temporal dimension of evolving packet flows. This limitation necessitates the evolution into Spatio-Temporal architectures.
+
+\section{Self-Supervised Learning and Masked Autoencoders}
+\label{sec:ssl}
+To solve the dependency on labeled zero-day attack data, we turn to Self-Supervised Learning (SSL). SSL formulates a "pretext task" where the supervision signal is generated automatically from unlabeled data \cite{balestriero2023cookbook}.
+
+
+The success of Self-Supervised Learning (SSL) in Natural Language Processing was largely driven by Masked Language Modeling (MLM), popularized by architectures like BERT \cite{devlin2019bert}. Similarly, Computer Vision experienced a paradigm shift through Masked Image Modeling (MIM) via Masked Autoencoders (MAE) \cite{he2022masked}
+
+The Masked Autoencoder is a highly efficient architecture for generative SSL. It relies on an asymmetric design:
+\begin{itemize}
+    \item \textbf{Asymmetric Encoder:} The input sequence is heavily masked (around $70\%$). The encoder processes only the small subset of visible tokens, significantly reducing computational overhead.
+    \item \textbf{Lightweight Decoder:} The decoder reconstructs the original signal from the latent representations and learned ``mask tokens.''
+\end{itemize}
+
+The optimization objective minimizes the Mean Squared Error (MSE) strictly on the masked tokens:
+\begin{equation}
+\mathcal{L}_{MSE} = \frac{1}{|M|} \sum_{i \in M} \| x_i - \hat{x}_i \|^2
+\label{eq:mae_loss} 
+\end{equation}
+This generative self-supervision is highly effective for NIDS. Because the model is trained exclusively on normal traffic, any anomalous packet sequence will violate learned correlations, resulting in a higher MSE anomaly score.
+
+
+\section{Masked Flow Modeling (MFM)}
+\label{sec:mfm}
+
+MFM was designed to address the inefficiencies and redundancies in spatial-domain masking and to leverage the unique properties of the frequency domain for more effective representation learning \cite{xie2023mfm}.
+
+ MFM masks and predicts in the frequency domain, where different frequency components capture different aspects of the data (e.g, low frequencies for global structure, high frequencies for fine details). This approach reduces redundancy and creates a more meaningful self-supervised task.
+
+\subsection{The Mechanics of MFM}
+In Masked frequency Modeling, a continuous network flow (comprising a sequence of packets, temporal features, or spatio-temporal tubelets) is divided into discrete tokens. During the pre-training phase. 
+
+The architecture's encoder processes exclusively the unmasked (visible) tokens, extracting deep contextual representations. Subsequently, the decoder attempts to predict or reconstruct the original, uncorrupted values of the masked tokens based purely on the bidirectional spatial and temporal context of the visible tokens \cite{xie2023mfm}.
+
+Mathematically, given a flow sequence $X = \{x_1, x_2, \dots, x_T\}$, a subset of indices $M$ is chosen for masking. The objective is to minimize the reconstruction loss $\mathcal{L}_{\text{MFM}}$ strictly over the masked tokens:
+\begin{equation}
+\mathcal{L}_{\text{MFM}} = \sum_{i \in M} \text{Loss}(x_i, \hat{x}_i)
+\end{equation}
+where $\hat{x}_i$ is the predicted token reconstructed by the decoder. For continuous network features, this loss function is typically expressed as the Mean Squared Error (MSE).
+
+\subsection{MFM as an Anomaly Detection Trigger}
+MFM is well suited for Network Intrusion Detection Systems (NIDS). Traditional supervised learning relies heavily on labeled attack data, creating inherent vulnerabilities to zero-day exploits. By employing MFM as a pretext task, the Transformer model learns the intrinsic syntax, structural dependencies, and temporal dynamics of purely \textit{benign} network traffic without requiring human annotation.
+
+When deployed for anomaly detection, the MFM framework calculates the reconstruction error of incoming, real-time traffic. Legitimate flows will closely match the learned syntax, yielding a low reconstruction error. Conversely, malicious traffic—such as Advanced Persistent Threats (APTs) or zero-day malware—inherently violates the learned temporal and spatial correlations of benign traffic. The decoder will fail to reconstruct these anomalous sequences, resulting in a severe spike in the Mean Squared Error. This reconstruction failure serves as a highly accurate, dynamic intrusion alert.
+
+
+\section{Spatio-Temporal Transformers for Network Topologies}
+
+
+A Spatio-Temporal Transformer, is a deep learning architecture designed to model data that evolves across both space and time. Its main objective is to learn relationships between entities observed at different positions or feature locations and at different time steps. Unlike classical recurrent models, which process sequences step by step, transformers rely on self-attention to capture short-range and long-range dependencies in parallel. This makes them especially suitable for complex multivariate sequences in which relevant interactions may occur across distant times or across multiple components of the input.
+
+In a general setting, the input can be represented as a sequence of structured observations:
+$$
+X = \{x_1, x_2, \dots, x_T\}
+$$
+where each $x_t$ is not simply a scalar but a multidimensional observation describing the system at time $t$. In many applications, each $x_t$ may itself contain several spatial components, feature channels, patches, nodes, sensors, or tokens. The purpose of the STT is to jointly model:
+$$
+\text{spatial relationships} \quad+\quad \text{temporal relationships}
+$$
+
+
+Standard 2D image models (like ViT) ignore temporal relations, making them unsuitable for continuous sequence predictions. Conversely, sequence models ignore topological structure. By extending into 3D architectures, we represent collected network data as a 3D volume (cube or cuboid), where spatial network features form the 2D grid, and time serves as the third dimension.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{cube time space .png}
+    \caption{Representation of the network data in 3D}
+    \label{fig:3D}
+\end{figure}
+
+
+\textbf{However} the term \textbf{spatial}  does not always mean physical 2D or 3D space. More generally, it refers to the structure internal to each observation at a given time step. Depending on the application:
+\begin{itemize}
+\item image patches in computer vision
+\item body joints in human motion modeling
+-\item sensors in IoT data
+\item graph nodes in traffic networks
+\end{itemize}
+
+Thus, the spatial dimension represents how components within the same time step relate to one another.
+
+
+The \textbf{temporal} dimension represents how the observations evolve over time. It captures:
+\begin{itemize}
+    \item sequential order
+    \item short-term transitions
+    \item long-term dependencies
+    \item recurring patterns
+    \item abrupt changes
+    \item trends and periodicity
+  
+\end{itemize}
+
+In other words, temporal modeling analyses how the current state depend on past and future states.
+
+\subsection{STT Concept}
+The central concept of an STT is to first encode each input element into a latent representation and then use self-attention to allow each token to interact with all others. This lets the model learn which parts of the spatio-temporal sequence are relevant for reconstructing, predicting, or classifying the data.
+
+If the input sequence is tokenized into embeddings:
+$$
+Z = \{z_1, z_2, \dots, z_N\}, \quad z_i \in \mathbb{R}^{d}
+$$
+then self-attention computes contextualized representations by comparing tokens through query, key, and value projections:
+$$
+Q = ZW_Q,\quad K = ZW_K,\quad V = ZW_V
+$$
+and then:
+$$
+\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
+$$
+
+This operation allows each token to attend to all other tokens, thereby learning both local and global relationships.
+
+
+\section{Spatio-Temporal Transformer (STT) Foundations}
+
+\subsection{Generalized Architecture}
+A robust STT architecture functions as a multi-stage pipeline designed to map raw, time-varying signals into a structured latent space. The generalized framework consists of five primary modules:
+
+\begin{enumerate}
+    \item \textbf{Input Tokenization:} The raw input is decomposed into discrete tokens. Depending on the domain, a token may represent a spatial patch (Computer Vision), a sensor vector (IoT), or a single packet's feature vector (Cybersecurity).
+    
+    \item \textbf{Latent Projection (Embedding Layer):} Each token $x_i$ is projected into a high-dimensional latent space $d_{model}$ via a learnable linear transformation:
+    \begin{equation}
+        e_i = \mathbf{W}_{emb} x_i + \mathbf{b}_{emb}
+    \end{equation}
+
+In other words to process this 3D volume, the model extracts ``tubelets'' small 3D blocks of data spanning across both the spatial network features and temporal time-windows. 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.5\linewidth]{images/tuplet embengin for stt.png}
+    \caption{Visualisation of the tubelet embedding}
+    \label{fig:Embedding}
+\end{figure}
+
+The tubelet is flattened into a vector representation $z \in \mathbb{R}^{D}$, making volumetric spatio-temporal information strictly compatible with the Transformer architecture.
+
+
+    
+    \item \textbf{Encoding Order (Positional \& Temporal):} As Transformers are permutation-invariant, we inject structural information by adding positional encodings $p_i$:
+    \begin{equation}
+        h_i = e_i + p_i
+    \end{equation}
+    This ensures the model distinguishes between "Feature A at Time 1" and "Feature A at Time 10."
+    
+    \item \textbf{Transformer Encoder Blocks:} A stack of $L$ layers, each containing \textit{Multi-Head Self-Attention (MHSA)} and \textit{Feed-Forward Networks (FFN)}, processes the tokens in parallel to capture global dependencies.
+    
+    \item \textbf{Task-Specific Head:} The final hidden states are passed to a specialized head for objectives such as \textbf{Anomaly Detection}, \textbf{Traffic Forecasting}, or \textbf{Masked Reconstruction}.
+\end{enumerate}
+
+[Image of Spatio-Temporal Transformer (STT) architecture diagram]
+
+\subsection{Spatial and Temporal Attention Strategies}
+The efficiency of an STT depends heavily on how it reconciles the two dimensions of data:
+\begin{itemize}
+    \item \textbf{Joint Attention:} A single self-attention mechanism processes all spatio-temporal tokens simultaneously. While exhaustive, it suffers from $O((T \times S)^2)$ complexity.
+    \item \textbf{Factorized Attention:} The model alternates between spatial attention (within a time step) and temporal attention (across time steps). This reduces computational overhead while maintaining structural hierarchy \cite{bertasius2021space}.
+    \item \textbf{Hierarchical Attention:} Local patterns are learned first and subsequently aggregated into global representations, mimicking the receptive field expansion of CNNs.
+\end{itemize}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\subsection{Hyperparameters}
+Hyperparameters are external settings that are defined before training begins and control how the model learns . The prefix `hyper-' indicates that these are `top-level' parameters that govern the learning process itself rather than being part of the resulting model.
+
+Key characteristics of hyperparameters:
+\begin{itemize}
+    \item External settings defined before training that control how the model learns.
+    \item Not learned by the model, but chosen manually or through optimization techniques.
+    \item External to the model and not part of the final trained model.
+    \item Critical for model performance and generalization ability.
+\end{itemize}
+
+Examples of hyperparameters:
+\begin{itemize}
+    \item \textbf{Learning rate:} Controls how fast parameters are updated during training, affecting convergence speed and stability.
+    \item \textbf{Number of epochs:} Determines how many times the model sees the full dataset during trainin.
+    \item \textbf{Batch size:} Number of samples processed before updating parameters, influencing training efficiency and memory usage .
+    \item \textbf{Number of layers/neurons in neural networks:} Architecture decisions that determine model capacity and complexity .
+    \item \textbf{Regularization strength (e.g., L1/L2):} Controls overfitting by penalizing large parameter values .
+    \item \textbf{Number of trees/depth in Random Forest or Gradient Boosting:} Ensemble specific parameters affecting model complexity and performance .
+    \item \textbf{Choice of activation function:} Determines the non-linear transformation applied to neuron outputs. Examples include ReLU, Sigmoid, Tanh, Leaky ReLU, ELU, and Swish .
+    \item \textbf{Choice of optimizer:} Determines the algorithm used to update model parameters during training. Examples include SGD, Adam, RMSprop, AdaGrad, and Nadam .
+\end{itemize}
+
+The distinction between parameters and hyperparameters is fundamental to machine learning: while parameters define what the model has learned, hyperparameters define how the learning process itself is conducted . Both are essential for developing effective machine learning models, but they serve different purposes and require different approaches for optimization and selection.
+
+\section{Model Evaluation Metrics}
+
+\subsection{Accuracy, Precision, Recall, and F1-Score}
+The evaluation of machine learning models requires multiple metrics to capture different aspects of performance. The most fundamental metrics are derived from the confusion matrix, which contains True Positives (TP), True Negatives (TN), False Positives (FP), and False Negatives (FN) .
+
+\begin{itemize}
+    \item \textbf{Accuracy} is the ratio between correctly classified samples and the total number of samples, calculated as:
+    \begin{equation}
+        \text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN} \in [0,1]
+        \label{eq:accuracy}
+    \end{equation}
+    However, accuracy can be misleading in cases of class imbalance.
+
+    \item \textbf{Recall}, also known as sensitivity or True Positive Rate (TPR), denotes the rate of positive samples correctly classified:
+    \begin{equation}
+        \text{Recall} = \frac{TP}{TP + FN} \in [0,1]
+        \label{eq:recall}
+    \end{equation}
+    This metric is particularly important in medical applications (and cybersecurity) where missing positive instances should be minimized.
+
+    \item \textbf{Precision} represents the proportion of correctly classified positive samples among all samples assigned to the positive class:
+    \begin{equation}
+        \text{Precision} = \frac{TP}{TP + FP} \in [0,1]
+        \label{eq:precision}
+    \end{equation}
+    High precision indicates that the model makes few false positive errors.
+
+    \item \textbf{The F1-score} is the harmonic mean of precision and recall, providing a balanced measure:
+    \begin{equation}
+        F1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}} \in [0,1]
+        \label{eq:f1_score}
+    \end{equation}
+    This metric is particularly useful when there is an uneven class distribution.
+\end{itemize}
+
+\subsubsection{Confusion Matrix}
+A confusion matrix is defined as a table used to visualize the performance of a classifier, with rows and columns representing each class. For binary classification, it takes the form of a $2 \times 2$ matrix containing the counts of TP, TN, FP, and FN observations. The confusion matrix provides a comprehensive view of model performance, showing not only correct classifications but also the types of errors being made. This detailed breakdown is essential for understanding model behavior and identifying specific areas for improvement .
+
+\subsubsection{Receiver Operating Characteristic (ROC) Curve and Area Under Curve (AUC)}
+The Receiver Operating Characteristic (ROC) curve is a graphical plot that illustrates the diagnostic ability of a binary classifier as its discrimination threshold is varied. The curve plots the true positive rate (sensitivity) against the false positive rate ($1 - \text{specificity}$) at various threshold settings. The Area Under the ROC Curve (AUC) provides a single scalar value that summarizes the performance across all possible thresholds .
+
+AUC exhibits several desirable properties compared to overall accuracy: increased sensitivity in Analysis of Variance (ANOVA) tests, a standard error that decreases as both AUC and the number of test samples increase, decision threshold independence, and invariance to a priori class probabilities . For these reasons, AUC is often preferred over overall accuracy for single-number evaluation of machine learning algorithms.
+
+\subsubsection{Precision--Recall Curve}
+Precision-Recall (PR) curves are particularly useful for evaluating classifiers on highly skewed datasets. Unlike ROC curves, PR curves focus on the performance of the positive class, making them more informative when the negative class dominates the dataset. The curve plots precision against recall at various threshold settings, providing a clear picture of the trade-off between these two metrics .
+
+A deep connection exists between ROC space and PR space, such that a curve dominates in ROC space if and only if it dominates in PR space  However, there are important differences: in PR space, it is incorrect to linearly interpolate between points, and algorithms that optimize the area under the ROC curve are not guaranteed to optimize the area under the PR curve. This makes PR curves essential for evaluating models on imbalanced datasets common in intrusion detection tasks.
+
+\subsubsection{Training and Validation Loss Curves}
+Training and validation loss curves are fundamental tools for monitoring the learning process of neural networks and detecting issues such as overfitting and underfitting. During training, the optimization algorithm tries to minimize the cost function of the network, and the loss curves show how this metric changes over epochs .
+
+Analysis of these curves allows for early detection of training issues, enabling timely interventions such as early stopping, learning rate adjustment, or model architecture modifications to improve performance and prevent wasted computational resources.
+
+
+
+
+
+
+
+
+\part{State of the Art}
+
+\section{Introduction}
+This chapter provides a comprehensive review of recent literature addressing Network Intrusion Detection Systems (NIDS) utilizing advanced machine learning techniques. The purpose is to present the main datasets and methodologies that have been proposed. 
+
+To track the evolution of the field and highlight the gaps that necessitate our proposed architecture, the state-of-the-art papers are grouped thematically by their core approach to processing network data. 
+
+We transition from models that attempt to map network data into 2D visual representations, to those treating flows as NLP-style sequences, moving to cutting-edge models exploring Graph and Spatio-Temporal topologies, and finally the detection of zero-day attacks.
+
+\section{Datasets}
+
+ To accurately simulate network environments, exercise  testing  and  integrate proposed solutions, the cybersecurity community relies on baseline traffic captures. 
+ In this section, we present an overview of the most prominent benchmark datasets utilized in the state-of-the-art literature, highlighting their specific network topologies.
+
+% --- Proceed to describe the specific datasets --
+
+\subsubsection{KDD-99:}
+
+  The 1999 KDD intrusion detection contest uses a standard set of data \cite{kddcup99} which includes a wide variety of intrusions simulated in a military network environment.The purpose is to audit  and evaluate research in intrusion detection ,
+  Labs set up an environment to acquire nine weeks of raw TCP dump data for a local-area network (LAN) simulating a typical U.S. Air Force LAN. .
+
+The raw training data was about four gigabytes of compressed binary TCP dump data from seven weeks of network traffic.  This was processed into about five million connection records.  Similarly, the two weeks of test data yielded around two million connection records.
+
+
+Attacks fall into four main categories
+
+\begin{itemize}
+    \item \textbf{DOS (Denial of Service):} Attempts to shut down or overload a network (e.g., SYN flood).
+    \item \textbf{R2L (Remote to Local):} Unauthorized remote access attempts (e.g., password guessing).
+    \item \textbf{U2R (User to Root):} Unauthorized escalation of local privileges (e.g., buffer overflows).
+    \item \textbf{Probing:} Surveillance and scanning to find vulnerabilities (e.g., port scanning).
+\end{itemize}
+
+
+\subsubsection{NSL-KDD:}
+NSL-KDD \cite{kdd2009datset} is a dataset suggested to solve some of the inherent problems of the KDD'99 dataset
+
+\subsubsection{CIC-IDS2017:}
+\textbf{CIC-IDS2017} \cite{CICIDS2017}, was developed by the Canadian Institute for Cybersecurity (CIC), represents a critical milestone in NIDS evaluation. It was specifically engineered to address the severe architectural shortcomings and lack of modern threat representation found in legacy benchmarks like KDD Cup 99 and NSL-KDD \cite{sharafaldin2018toward}. 
+
+Unlike older, purely synthetic datasets, \textbf{CIC-IDS2017} captures highly realistic background traffic which extracts and simulates the abstract behavior of genuine human interactions (e.g., HTTP, HTTPS, FTP, SSH, and email protocols). The dataset encompasses five days of dense network activity, featuring a comprehensive taxonomy of modern attack vectors categorized as follows:
+\begin{itemize}
+    \item \textit{DDoS} and \textit{Dos} 
+    \item \textit{Web Attacks} and \textit{Brute Force}
+    \item \textit{Infiltration} and \textit{PortScans} 
+    \item \textit{Botnets}
+\end{itemize}
+
+
+\subsubsection{CIC-IDS2018:}
+
+The CSE-CIC-IDS2018 \cite{cic2018dataset} dataset is a large-scale, dynamically generated benchmark. Created as a collaborative project between the Communications Security Establishment (CSE) and the Canadian Institute for Cybersecurity (CIC) on the AWS cloud computing platform, this dataset addresses the critical limitations of older static benchmarks by providing realistic, up-to-date traffic compositions. It is  a direct evolution of the CIC-IDS2017 dataset.
+ 
+To synthesize a highly realistic network environment, the dataset utilizes a profile-based generation methodology. The key characteristics of this approach include:
+
+\begin{itemize}
+    \item \textbf{B-Profiles (Benign Profiles):} These encapsulate the naturalistic behavior of human users by leveraging machine learning and statistical analysis techniques to simulate standard protocols such as HTTP, HTTPS, FTP, SSH, and email.
+    
+    \item \textbf{M-Profiles (Malicious Profiles):} These introduce seven distinct, modern attack scenarios into the network, specifically: Brute-force, Heartbleed, Botnets (Zeus and Ares), DoS, DDoS, Web attacks, and internal network infiltration.
+    
+    \item \textbf{Diverse Topology:} The dataset simulates a complex organizational infrastructure comprising 5 departments, 30 servers, and 420 victim machines running various Windows and Linux operating systems. This internal network is targeted by an external attacking infrastructure of 50 machines.
+    
+    \item \textbf{Comprehensive Data Sources:} For advanced cybersecurity and machine learning research, the dataset is exceptionally thorough. It provides raw network traffic captures (PCAPs) and system event logs (from both Windows and Ubuntu environments) for researchers who wish to build custom feature extractors.
+\end{itemize}
+
+
+\subsubsection{UNSW-NB15:}
+
+
+The \textbf{UNSW-NB15} dataset is a comprehensive network intrusion detection benchmark generated in the Cyber Range Lab of UNSW Canberra \cite{UNSW-NB15dataset}. Created to provide a highly realistic evaluation environment, the dataset utilizes the \textit{IXIA PerfectStorm} emulation tool to synthesize a hybrid manifold of real, modern, normal network activities alongside contemporary synthetic attack behaviors.
+
+The underlying composition of the dataset is organized as follows:
+
+\begin{itemize}
+    \item \textbf{Traffic Volume and Ingestion:} The raw network captures consist of approximately $100\text{~GB}$ of raw traffic captured via the \texttt{tcpdump} utility and archived in native PCAP format. 
+    \item \textbf{Attack Taxonomy:} The malicious traffic profiles encompass nine distinct structural categories of cyber-attacks:
+    \begin{itemize}
+        \item \textit{Fuzzers} and \textit{Analysis}
+        \item \textit{Backdoors} and \textit{Exploits}
+        \item \textit{DoS} and \textit{Worms}
+        \item \textit{Generic}, \textit{Reconnaissance}, and \textit{Shellcode}
+    \end{itemize}
+    \item \textbf{Feature Extraction Pipeline:} To facilitate advanced machine learning applications, the dataset creators deployed a pipeline leveraging \texttt{Argus}, \texttt{Bro-IDS} (Zeek), and twelve specialized custom heuristic algorithms to extract $49$ distinct multivariate features embedded with corresponding ground-truth class labels.
+\end{itemize}
+
+In its entirety, the complete dataset contains $2,540,044$ connection records structurally distributed across four tabular CSV files, which are accompanied by a dedicated ground-truth table and an event list. 
+
+To guarantee reproducibility and uniform baseline testing across comparative research studies, a standardized subset has been formally partitioned into two non-overlapping sets: a dedicated training set containing $175,341$ records and a test set containing $82,332$ records. Both partitions maintain a complex, mathematically balanced mixture of benign baseline communication profiles and active threat vectors.
+
+
+\section{Database normalization}
+Database normalization is a fundamental database design principle utilized to structure data in a consistent and organized manner. The primary purpose of normalization is to reduce complexity, eliminate data duplication, and avoid data redundancy. By dividing data into multiple tables linked through relationships—established via primary keys, foreign keys, and composite keys—normalization ensures the integrity of the database. 
+Furthermore, it is critical for eliminating undesirable characteristics and anomalies associated with the insertion, deletion, and updating of data records.
+
+Normalization is implemented through a series of progressive stages, known as normal forms. These forms are cumulative, meaning that each subsequent level builds upon the foundational rules of the levels beneath it. While normalization can theoretically extend to the fourth, fifth, and even sixth normal forms depending on data size and system requirements, the Third Normal Form (3NF) is the most commonly achieved standard in standard relational database design. \cite{chris_2022_normalization}
+
+\subsection*{First Normal Form (1NF)}
+For a table to be in the first normal form, it must meet specific criteria. A single cell must not hold more than one value, which establishes atomicity . Furthermore, there must be a primary key for identification, there can be no duplicated rows or columns, and each column must have only one value for each row in the table . 
+
+\subsection*{Second Normal Form (2NF)}
+Because 1NF only eliminates repeating groups and not redundancy, the second normal form is required. A table is considered to be in 2NF if it is already in 1NF and possesses no partial dependency . This means that all non-key attributes are fully dependent on a primary key . For example, if a table has a composite primary key but certain columns only depend on one part of that key, those columns must be separated into a different table to achieve 2NF .
+
+\subsection*{Third Normal Form (3NF)}
+Even when a table is in 2NF and eliminates repeating groups and redundancy, it does not eliminate transitive partial dependency . Transitive partial dependency occurs when a non-prime attribute (an attribute that is not part of the candidate's key) is dependent on another non-prime attribute . Therefore, for a table to achieve 3NF, it must be in 2NF and have no transitive partial dependency . While further normal forms like 4NF and 5NF exist depending on data size and requirements, 3NF is the most common normal form used .
+
+
+
+
+
+
+
+\section{Related Research}
+
+In this section, we review the existing research and publications that are  related to our work. Examining these papers allows us to establish a clear comparative baseline and contextualizes our approach within the current state of the art.
+
+% --- CATEGORY 1: VISUAL ---
+\section{Visual Representation and Image-Based Models}
+A significant branch of recent research attempts to bypass the limitations of tabular data by mathematically transforming network packets and flows into 2D. This allows the utilization of mature Computer Vision architectures (like CNNs and ViTs) for anomaly detection.
+
+\subsection{Xu \& al., "Falcon" 2021}
+Introduces \cite{xu2021falcon}, an Android malware detection framework that treats network traffic classification as a 2D image sequence classification problem.The framework was trained and evaluated using the \textbf{Android Malware CICMal2017 dataset}, which includes 426 malware and 1700 benign samples. From 2,126 raw PCAP files, the authors extracted over 3,255,391 total network flows.
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{Network Flows to Images:} Packets are converted into 2D grayscale images by trimming or padding flows to ensure a uniform 784-byte size.
+    \item \textbf{Continuous Traffic Processing:} A pre-trained 8-layer CNN extracts vectors, which are then passed through a bi-directional LSTM network to capture temporal sequential relationships between the 2D packet images.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Evaluated on the used Dataset achieved an accuracy of 97.16\% in binary classification and 84.70\% in multi-class categorization. The model was tested against various classifiers, including AdaBoost, GradientBoost, MLP, and DecisionTree. The \textbf{Random Forest} classifier achieved the best performance with an accuracy of 97.16, precision of, 97.13, recall of 97.16, and an F1-score of 97.09.
+\end{itemize}
+
+\subsection{L. Mohammadpour \& al., "CNN-Based IDS Survey" 2022}
+This survey \cite{mohammadpour2022survey} provides a comprehensive study on a CNN-based IDS, categorizing it into four main approaches: single CNN models, hybrid CNN-RNN architectures (combining CNNs with LSTMs or GRUs for spatial-temporal feature extraction), hybrid CNNs with deep learning models (like autoencoders), and hybrid CNNs paired with machine learning algorithms.It also analyzes architectures, hyperparameter settings, and input dimension types (1D vs. 2D).
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item Highlights preprocessing methods used to convert tabular network packets into 2D formats (grayscale matrices) to extract hierarchical correlations without manual feature engineering.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Reviews KDD Cup99, NSL-KDD, UNSW-NB15, and CIC-IDS2017. Confirms that hybrid CNN models (e.g., CNN-LSTM) consistently outperform single CNNs by capturing temporal sequences alongside spatial properties. 
+\end{itemize}
+
+\subsection{Kim \& al., "Multiple Image Transformers" 2023}
+\cite{kim2023deep} introduces an optimized method for converting tabular NIDS datasets into 2D visual representations utilizing multiple image transformers, integrating dimensionality reduction to construct RGB images.
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{RGB Image Synthesis:} Employs algorithms (t-SNE, UMAP, PCA) to map numerical features into 2D spatial matrices. The top three are mapped to Red, Green, and Blue channels to synthesize a multi-dimensional RGB image.
+    \item \textbf{Dual CNN Classifier:} Utilizes a four-layer dual CNN with parallel convolutional filters to process the generated RGB images.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item This survey \ proposed multiple-transformer ensemble using 3-channel color images achieved superior performance with an \textbf{Accuracy} of \textbf{95.60} and an \textbf{F1-Score} of \textbf{93.86} on the ISCXIDS2012 dataset. On the CSE-CIC-IDS2018 dataset, the method achieved an \textbf{Accuracy} of \textbf{95.50} and an \textbf{F1-Score} of \textbf{92.52} 
+\end{itemize}
+
+\subsection{He \& al., "DE-VIT" 2024}
+This study \cite{he2024network} introduces a Deformable Vision Transformer (DE-VIT) to address network intrusion detection by transforming data into image formats. It leverages deformable attention mechanisms to capture global and local features while minimizing computational costs.
+
+\subsubsection{Architecture and Solution}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\linewidth]{./images/SOTA2024VIT-IDS.png}
+    \caption{Model process \cite{he2024network} }
+\end{figure}
+\begin{itemize}
+    \item \textbf{Data Transformation:} Preprocesses traffic into 64 features and reshapes them into an $8\times8$ image matrix. It applies deformable convolutions with a sliding window to extract image features.
+    \item \textbf{Deformable Attention:} Instead of dense self-attention, the model calculates relationships only with surrounding features, reducing overhead.
+    \item \textbf{L-Focal Loss:} Implemented to address highly imbalanced datasets.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Achieved an \textbf{Accuracy} of 99.5\% on CIC-IDS2017 \cite{canadian2017cicids} and 97.25\% on UNSW-NB15\cite{canadian2017cicids} and produced an exceptional Area Under the Curve \textbf{(AUC)} of 0.995 in binary configurations, significantly outperforming CNN and LSTM baselines. 
+\end{itemize}
+
+\subsection{Abed \& al., "A modified CNN-IDS model" 2024}
+This study \cite{abed2024modified} addresses supersized data spaces by implementing feature selection techniques prior to image-based CNN classification.
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{Dimensionality Reduction:} Employs PCA and Singular Value Decomposition (SVD) to mathematically transform the feature space and discard irrelevant noise.
+    \item \textbf{Hybrid Classification:} Evaluates the transformed space using Ridge Regression, Stochastic Gradient Descent, and CNNs to execute threat detection.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item The study achieved a successful implementation with a \textbf {Precision} around 86.93 to 88.52  precision for UNSW-NB15, and about 93.81 to 99.67 for the WSN‑DS dataset.  
+\end{itemize}
+
+\subsection{Xiao Liu \& al., "Mean Masked Autoencoder with Flow-Mixing for Encrypted Traffic Classification" 2026}
+Recently, the application of Masked Autoencoders (MAE) for encrypted traffic classification has highlighted the limitations of standard random masking, which is ill-suited for the high semantic density of network packets. To overcome this constraint, Liu et al. (2026) proposed the Mean Masked Autoencoder (MMAE) \cite{liu2026mean}, an architecture leveraging a teacher-student self-distillation paradigm coupled with a Flow-Mixing strategy. This approach replaces conventional masking by injecting cross-flow interference, thereby compelling the model to discriminate features within highly noisy environments. 
+
+While this method improves model robustness, it remains restricted to a strictly spatial modeling of the traffic. In contrast to this flow-mixing approach, our architecture resolves temporal feature extraction through direct modeling in the spectral domain. By introducing Masked Frequency Modeling (MFM) via Fast Fourier Transform (FFT), our foundation model captures the intrinsic spatio-temporal dynamics of an isolated flow, thus bypassing the computational complexity associated with asymmetric flow pairing.
+
+
+% --- CATEGORY 2: SEQUENTIAL NLP ---
+\section{Sequential Flow and NLP-Adapted Transformers}
+While visual models successfully mapped spatial correlations, they often struggle with long-term temporal dependencies. Consequently, another major research branch treats network flows identically to sentences in Natural Language Processing (NLP), applying standard sequence-based Transformers.
+
+\subsection{Athul K \& Anita John., "A Deep Learning based Intrusion Detection System using Transformers" 2022}
+This study \cite{k2022deep} focuses on minimizing computational complexity by ranking and selecting important security features using NLP models before classification. 
+
+\subsubsection{Architecture and Solution}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{./images/SOTA-Trans-dl-2022.png}
+    \caption{System Design \cite{k2022deep} }
+\end{figure}
+\begin{itemize}
+    \item \textbf{Feature Selection Classification:} The dataset is preprocessed to identify and utilize only the 30 most important features to reduce computational complexity and overhead.
+    \item \textbf{Data Transformation Classification:} The framework converts the intrusion and normal records into strings of text sequences. These sequences are then tokenized and parsed into chunks of length six.
+    \item \textbf{Padding and Masking:} The tokens are appended with padding and masked, which is a necessary step for the transformer architectures to function properly.
+    \item \textbf{Classification:} The processed data is fed into the defined BERT and GPT-2 models for binary classification
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Evaluated on CICIDS2017. Proved that leveraging NLP transformers for feature dimensionality reduction minimizes computational complexity while maintaining high detection rates. 
+\end{itemize}
+
+\subsection{Wu \& al., "RTDIS" 2022}
+\cite{wu2022rtids} serves as a foundational baseline demonstrating how transformers effectively handle high-dimensional traffic data without losing critical feature representations.
+
+\subsubsection{Architecture and Solution}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\linewidth]{./images/SOTA2022RTIDS.png}
+    \caption{RTDIS model architecture \cite{wu2022rtids} }
+\end{figure}
+\begin{itemize}
+    \item \textbf{Data Balancing:} To combat the severe class imbalance in the datasets and prevent model overfitting, the framework utilizes the Synthetic Minority Oversampling Technique (SMOTE) during preprocessing.
+    \item \textbf{Self-Attention Mechanism:} A multi-head self-attention mechanism is applied to learn varying weights of feature representations, bypassing traditional recurrent connections.
+    \item \textbf{Masked Decoders for Robustness:} The decoder stack includes an additional masked self-attention sublayer that randomly masks a portion of features.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item RTIDS achieved an F1-Score of 99.17\% on CICIDS2017 and 98.48\% on CIC-DDoS2019, outperforming baseline models including SVM, RNN, and LSTM. 
+\end{itemize}
+
+\subsection{Liu \& al., "Intrusion Detection Model Based on Improved Transformer" 2023}
+\cite{liu2023intrusion} addresses three challenges: lengthy training times, inaccurate detection of overlapping classes, and poor multi-class classification by optimizing positional encoding for non-sequential data.
+
+\subsubsection{Architecture and Solution}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.45\linewidth]{./images/SOTA2023modelbasedids.png}
+    \caption{Improved Transformer-based intrusion detection model \cite{liu2023intrusion} }
+\end{figure}
+\begin{itemize}
+    \item \textbf{Improved Position Encoding:} Standard Transformer encoding is ineffective for independent numerical features. The authors modified the formula to embed the positional index of each feature ($i$) to learn spatial dependencies.
+    \item \textbf{Hybrid Sampling \& Two-Stage Learning:} Uses KNN under-sampling and Borderline-SMOTE, followed by a rough binary classification (normal vs. attack) leading into an accurate multi-class prediction.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item On the NSL-KDD dataset, the model achieved an accuracy of 88.7\% and an F1-score of 88.2\% for binary classification, with a remarkably fast training time of only 8 seconds. For multi-class classification, it recorded an 84.1\% accuracy and an 83.8\%  F1-score. On the UNSW-NB15 dataset, the model achieved 87.5\% accuracy and an 87.3\% F1-score for multi-class classification, completing training in just 19 seconds.
+\end{itemize}
+
+\subsection{Manocchio \& al., "FlowTransformer" 2024}
+This study \cite{manocchio2024flowtransformer} evaluates various transformer components (input encoding, blocks, heads) for flow-based network traffic. It aims to identify the optimal configurations for NIDS by comparing various transformer architectures, input encodings, and classification heads.
+
+\subsubsection{Architecture and Solution}
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.95\linewidth]{images/SOTA2024FlowTransformercopie.png}
+    \caption{FlowTransformer framework architecture \cite{manocchio2024flowtransformer}. }
+\end{figure}
+\begin{itemize}
+    \item \textbf{Shallow vs. Deep Transformers:} Reveals that shallow transformers (e.g, 2 layers) perform equivalently to deep models (BERT/GPT) in flow-based tasks while offering vastly superior computational throughput.
+    \item \textbf{Classification Head:} Proves that the "Last Token" approach significantly outperforms Global Average Pooling for NIDS contexts.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item It achieved a state-of-the-art F1-Score of 98.00\% on NSL-KDD, 97.05\% on CSE-CIC-IDS2018, and 90.45\% on UNSW-NB15.
+\end{itemize}
+
+\subsection{F.Ullah \& al., "IDS-INT" 2024}
+In this study \cite{ullah2024ids} the authors created a deep learning-based Intrusion Detection System (IDS) that applies Natural Language Processing (NLP) algorithms—specifically BERT and GPT-2 to detect modern cyber threats. 
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{Semantic Tokenization:} Parses PCAP files to extract flow events. It utilizes a BERT large model to compute contextual relationships and extract semantic train features.
+    \item \textbf{CNN-LSTM Classifier:} Feeds the BERT-extracted features into a 1D-CNN and LSTM network to capture sequential and temporal dependencies.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Tested on UNSW-NB15, CIC-IDS2017, and NSL-KDD. It successfully mitigated majority-class bias and significantly outperformed the baseline methods with an overall 99\% F1-score, and 99.21\% Accuracy.
+\end{itemize}
+
+\subsection{Berry \& al., "Explainability of Network Intrusion Detection Using Transformers" 2025}
+This study \cite{rajkumardheivanayahi2025explainability} shifts focus from traditional flow-based analysis to a packet-level approach. It addresses open-world recognition by leveraging transformers to generate natural language explanations for unknown network packets.
+
+\subsubsection{Architecture and Solution}
+
+\begin{itemize}
+    \item \textbf{Packet Embedding \& Clustering:} Utilizes a fine-tuned \textbf{Bert} model to generate 768-dimensional contextual embeddings for individual packets based on the first 500 payload bytes. It applies k-means clustering to assign network tags.
+    \item \textbf{Explainability:} A Falcon-7B decoder-only model is fine-tuned to generate human-readable descriptive sentences explaining the assigned tags and payload contents.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Evaluated on CIC-IDS2017 and UNSW-NB15. 
+    The fine-tuned BERT model achieved an accuracy of 99.48 and a macro F1-score of 98.46\% on a test set containing over 500,000 packets.
+    Also achieved an explainability score of 0.6331 and generated text with 95.53\% accuracy for packet details at a speed of 2 seconds per packet.
+\end{itemize}
+
+% --- CATEGORY 3: GRAPH AND SPATIO-TEMPORAL ---
+\section{Graph and Topological Network Modeling}
+Recognizing the network traffic is neither purely a flat 2D image nor a simple 1D sentence, the most recent frontier of NIDS research addresses the structural topology of networks. These models attempt to map the complex interconnections (spatial graphs) of network nodes and flows. 
+\subsection{Caville \& al., "Anomal-E" 2023}
+\cite{caville2023anomal} investigates the application of Graph Neural Networks (GNNs) for self-supervised network anomaly detection for unseen zero day attack, capturing lateral movement paths found in APTs without labeled traffic.
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{Edge-leveraging GNN (E-GraphSAGE):} Instead of standard node-based GNNs, the framework uses an E-GraphSAGE encoder to capture flow information and topological patterns.
+    \item \textbf{Self-Supervised Learning (Modified DGI):} It applies a modified Deep Graph Infomax (DGI) methodology. It generates a "corrupted" or negative graph by randomly shuffling the edge features while keeping the graph structure intact. The model is trained to maximize the mutual information between the extracted edge embeddings and the global graph summary.
+    \item \textbf{Downstream Anomaly Detection:} Once the E-GraphSAGE encoder extracts the latent edge embeddings, these are fed into traditional unsupervised novelty/anomaly detectors to do the binary classification. The authors tested four algorithms: PCA, Isolation Forest (IF), Clustering-Based Local Outlier Factor (CBLOF), and Histogram-Based Outlier Score (HBOS).
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item The Anomal-E-HBOS combination achieved the highest average Macro F1-score of 91.48\% across the datasets. The Anomal-E-CBLOF configuration achieved an average Macro F1-score of 93.04\%, followed closely by Anomal-E-HBOS at 91.89\%.
+\end{itemize}
+
+\subsection{Appiahene \& al., "NIDS Using a Hybrid Graph-Based and Transformer Architecture" 2026}
+\cite{appiahene2026network} Presents \textbf{GConvTrans (Graph Convolution Transformer Network)} a hybrid model combining a graph convolutional layer and a transformer encoder to address limitations in capturing both localized topological connections and global context within network data in distributed cloud environments.
+
+\subsubsection{Architecture and Solution}
+\begin{itemize}
+    \item \textbf{Graph Convolution Layer:} Transforms tabular data into computational graphs. Normalizes the adjacency matrix and aggregates information from immediate neighbors to encode local structural patterns.
+    \item \textbf{Transformer Encoder Layer:} Refined embeddings are processed through a Transformer utilizing multi-head self-attention to capture long-range dependencies and global context from distant nodes.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+\begin{itemize}
+    \item Evaluated on the CSE-CIC-IDS2018 dataset (DDoS subset). Achieved a testing accuracy of 96.94\%. Proves that combining graph convolutions and transformer encoders is highly efficient for capturing sophisticated patterns.
+\end{itemize}
+
+
+
+% --- CATEGORY 4: ZERO DAY ATTACK DETECTION ---
+\section{Zero-Day Attack Detection}
+
+\subsection{Hindy \& al., "Utilising Deep Learning Techniques for Effective Zero-Day Attack Detection" 2020}
+This paper \cite{hindy2020utilisingzeroday} aims to propose a lightweight Intrusion Detection System (IDS) based on Deep Learning to effectively flag zero-day attacks.The authors focus on building a model that achieves a high recall for detecting unknown attacks while minimizing the false negatives.
+
+\subsubsection{Approach Used}
+The researchers utilize an \textbf{Autoencoder} designed to act as a self-supervised outlier detector.
+\begin{itemize}
+    \item \textbf{Training on Benign Traffic:} The autoencoder is trained exclusively on normal/benign network traffic (using a 75\% training and 25\% validation split) so that it accurately learns the patterns of normal and usual behavior. Hence the simulation of the zero-day attack was done on the Dos and DDos detection.
+    \item \textbf{Zero-Day Detection:} During the evaluation phase, an attack is fed into the system. If the \textbf{Mean Squared Error (MSE)} which measures the reconstruction error between the original network traffic instance and the instance decoded by the autoencoder is larger than a predefined threshold, the traffic is flagged as an anomalous zero-day attack.
+    \item \textbf{Baseline Comparison:} To prove the model's efficacy, its performance is compared against a \textbf{One-Class Support Vector Machine (SVM)}, which is a well-established unsupervised outlier detection model.
+\end{itemize}
+
+\subsubsection{Experimental Results}
+The findings reveal that the autoencoder is highly effective at detecting complex zero-day attacks and significantly outperforms the One-Class SVM baseline.
+\begin{itemize}
+\item \textbf{CICIDS2017 Metrics:} The autoencoder achieves a global detection accuracy of 75\% to 98\%. The detection accuracy peaks at 90.01\% for DoS GoldenEye, 98.43\% for DoS Hulk, 98.47\% for Port scanning, and 99.67\% for DDoS attacks. The accuracy on benign traffic (specificity) relies on the chosen MSE threshold, achieving 95.19\%, 90.47\%, and 81.13\% for thresholds of 0.15, 0.1, and 0.05, respectively.
+\item \textbf{NSL-KDD Metrics:} The overall zero-day detection accuracy ranges between 89\% and 99\%. More precisely, the model attains overall accuracies of 91.84\%, 92.96\%, and 91.84\% using thresholds of 0.3, 0.25, and 0.2, respectively.
+\item \textbf{ On the specific KDD test+ evaluation dataset}, the autoencoder correctly detects DoS at 94.67\%, R2L at 95.95\%, and U2R at 83.78\%.
+\end{itemize}
+
+\subsection{Sarhan \& al., "From Zero-Shot Machine Learning to Zero-Day Attack Detection" 2021}
+This paper \cite{sarhan2021zeroshot} introduces a Zero-Shot Learning (ZSL) methodology to evaluate and improve how well ML models can generalize to detect completely unseen attacks in a post-deployment scenario.
+
+\subsubsection{Used Approach}
+The researchers apply Zero-Shot Learning (ZSL) using Multi-Layer Perceptron (MLP) and Random Forest (RF) classifiers. During the training phase, one specific attack class is intentionally excluded to simulate a zero-day scenario. The model learns the distinctive semantic attributes of malicious behavior from the known attacks. During the inference phase, the model uses these learned attributes to detect the unseen attack class. The Wasserstein Distance (WD) is also used to analyze the statistical differences between the feature distributions of known and unknown attacks.
+
+\subsubsection{Experimental Results}
+Evaluation was done on \textbf{UNSW-NB15} and \textbf{NF-UNSW-NB15-v2} (a more recent NetFlow-based version of the UNSW-NB15). On one hand the MLP classifier achieves an average Zero-day Detection Rate (Z-DR) of 85.5\%, while the RF averages 80.67\%. Both models easily detect attacks like Generic, DoS, and Worms (Z-DR > 90\%), but fail significantly on Fuzzers (around 15-20\%). On the other hand performance improves with the NetFlow version-2 features; MLP reaches a Z-DR of 92.45\% and RF reaches 87.37\%.
+
+\subsection{Kumar \& al., "A robust intelligent zero-day cyber-attack detection technique" 2021}
+\cite{kumar2021robust} proposes an intelligent model combining "heavy-hitters" and graph-based techniques to detect both High Volume Attacks (HVA) and Low Volume Attacks (LVA) without relying on known signatures.
+
+\subsubsection{Datasets}
+Evaluation was done on two types of data:
+\begin{itemize}
+    \item \textbf{Real-Time Data:} Traffic generated in a controlled virtual environment containing normal traffic alongside DoS/DDoS (HVA) and Probe/Data Theft/Keylogging (LVA) attacks.
+    \item \textbf{CICIDS18 } Benchmark
+\end{itemize}
+
+\subsubsection{Used Approach}
+The model processes raw network traffic as hexadecimal byte streams and operates in two main modules:
+\begin{itemize}
+    \item \textbf{HVA Module:} Uses a heavy-hitter algorithm to extract frequent k-gram tokens from the byte stream. Tokens that frequently appear in attack traffic but rarely in normal traffic (exceeding a threshold) form HVA signatures.
+    \item \textbf{LVA Module:} Tokens that fail the HVA threshold are passed to the LVA module. A directed graph is constructed where vertices are tokens and edges are their consecutive occurrences. A scoring function assigns weights to vertices, and paths exceeding a certain threshold are consolidated into zero-day LVA signatures.
+\end{itemize}
+
+\subsubsection{Experimental results}
+\begin{itemize}
+    \item \textbf{Real-Time Data:} For binary classification, the model achieves an Accuracy of 91.33\%, Precision of 99.77\%, Recall of 89\%, F-Measure of 94.1\%. For multi-class classification, it achieves 90.35\% Accuracy and an Attack Detection Rate of 87.5\%.
+    \item \textbf{CICIDS18 Data:} It reaches an Accuracy of 91.62\%, Precision of 99.99\%, Recall of 91.48\%, and an F-Measure of 95.54\%.
+\end{itemize}
+
+
+
+\subsection{Hairab \& al., "Anomaly Detection of Zero-Day Attacks Based on CNN and Regularization Techniques" 2023}
+\cite{hairab2023anomaly} evaluates how the integration of regularization techniques (L1 and L2) into CNN can mitigate overfitting and substantially improve the detection of zero-day IoT attacks.
+
+\subsubsection{Dataset}
+The models are trained and tested using the modern \textbf{TON-IoT} dataset  (network variant). The training dataset is composed exclusively of normal traffic and DDoS attacks. 
+
+\subsubsection{Used Approach }
+Nine relevant network features (such as protocol, duration, and bytes sent/received) are extracted and encoded. 
+
+These features are shaped into $3 \times 3$ matrices to simulate single-channel grayscale images. A standardized CNN architecture is employed in three variants: a standard (non-regularized) CNN, a CNN with L1 regularization (factor 0.005), and a CNN with L2 regularization. Classical ML classifiers (Logistic Regression, Naive Bayes, AdaBoost) are used as baselines. 
+
+\subsubsection{Experimental results}
+The testing was done onto two different scenario attacks:
+\begin{itemize}
+
+    \item \textbf{Scenario A (Backdoor):} Regularized CNNs vastly outperform other models. The CNN L2 model achieves 97.94\% Accuracy, 98.31\% Recall, 98.27\% F1 Score, and an AUC of 0.98. The non-regularized CNN only manages 83.15\% Accuracy, while the best classical ML model (Naive Bayes) achieves just 61.31\%.
+    \item \textbf{Scenario B (Scanning):} The CNN L1 model performs best, attaining 87.59\% Accuracy, 96.81\% Recall, 88.81\% F1 Score, and an AUC of 0.8899. The standard CNN hits 77.52\% Accuracy, while AdaBoost falls to 31.69\%.
+\end{itemize}
+
+\subsection{Appani \& al., "Self-Supervised Representation Learning for Zero-Day Attack Detection in Encrypted Network Traffic" 2023}
+\cite{appani2023selfsupervised} proposes a Self-Supervised Learning (SSL) framework to extract discriminative feature representations directly from encrypted traffic without needing labeled training data. 
+
+\subsubsection{Used Approach}
+The architecture is a hybrid of Transformer encoders and Temporal Convolutional Networks (TCNs). Because the payloads are encrypted, the model relies on self-supervised "pretext tasks" to learn underlying traffic patterns. These tasks include:
+\begin{itemize}
+    \item \textbf{Flow Reconstruction:} Masking 15-20\% of packet headers and forcing the model to recover them.
+    \item \textbf{Contrastive Learning:} Using NT-Xent loss to maximize the similarity between augmented versions of the same flow while distancing it from dissimilar flows.
+\end{itemize}
+Anomaly scoring is computed using the Mahalanobis distance in the latent space; flows distant from the centroid of benign training data are flagged as zero-day attacks.
+
+\subsubsection{Experimental results}
+The models are evaluated using two large-scale public datasets containing encrypted traffic: \textbf{CIC-IDS2017} and \textbf{UNSW-NB15}. The research concluded to these results:
+\begin{itemize}
+    \item \textbf{Zero-Day Detection:} The SSL model achieves an F1-Score of 88\%, a False Positive Rate of 1.80\%, and an AUC of 0.98 on unseen attacks. This represents a 22\% improvement in the F1-Score compared to standard Autoencoders, and a 15\% reduction in FPR compared to Isolation Forests.
+    \item \textbf{Cross-Dataset Generalizability:} Training on CIC-IDS2017 and testing on UNSW-NB15 yields a strong F1-Score of 85.3\%, proving the embeddings do not overfit to specific network topologies.
+\end{itemize}
+
+\subsection{Armijos \& al., "Zero-day attacks: review of the methods used based on intrusion detection and prevention systems" 2024}
+\cite{armijos2024zeroday} reviews zero-day attack mechanics and surveys the methodologies deployed by modern Intrusion Detection Systems (IDS) and Intrusion Prevention Systems (IPS), specifically comparing traditional approaches against contemporary Machine Learning  and Deep Learning  strategies.
+
+\subsubsection{Used Approach }
+The study provides a comparative theoretical analysis distinguishing between:
+\begin{itemize}
+    \item \textbf{SIDS (Signature-Based IDS):} Relies on matching traffic to known rule sets (e.g., Snort).
+    \item \textbf{AIDS (Anomaly-Based IDS):} Leverages ML algorithms (e.g., SVM, Decision Trees, Naive Bayes) and DL architectures (e.g., Neural Networks, Autoencoders) to learn normal network baselines and detect deviations representing zero-day threats.
+\end{itemize}
+
+\subsubsection{Experimental results}
+The review evaluates many datasets, including:  NSL-KDD, UNSW-NB15, CICIDS2017, CIC-AWS-2018.
+\begin{itemize}
+    \item \textbf{SIDS Inefficiency:} Signature-based tools like Snort only manage to detect an estimated 8.2\% of zero-day attacks.
+    \item \textbf{AIDS/ML Performance:} Semi-supervised ML techniques, such as combining One-Class SVM with Benford's law, achieve an F1-Score of 86\%. Other classic classifiers like SVM and Decision Trees reach around 95.1\% Accuracy.
+    \item \textbf{DL Superiority:} Neural Networks and Autoencoders vastly outperform other methods. Autoencoders evaluated on NSL-KDD yield Accuracies between 89\% and 99\%, and between 75\% and 98\% on CICIDS2017. The review confirms DL as the most capable approach for modeling zero-day evasions.
+\end{itemize}
+
+\subsection{Li \& al., "SAFE" 2025}
+Because machine learning approaches suffer from zero-day detection flaws due to labeled data dependency, the authors propose \cite{safe2025} this framework that learns representations of network behavior , to detect any novel behavior.
+\subsubsection{Used Approach} 
+First, SAFE restructures conventional tabular network intrusion data into 2D image-like matrices by leveraging Principal Component Analysis (PCA) to rank and select features. The core relies on a \textbf{Masked Autoencoder} that learns comprehensive behavioral representations from the unlabeled network mapping.
+
+Finally, the latent spatial features extracted by the encoder head of the MAE are paired with a lightweight anomaly/novelty detector (e.g., Local Outlier Factor - LOF) during inference to recognize emerging cyber-attacks.
+
+\subsubsection{Experimental results} 
+Evaluation was done across four extensive IIoT datasets: X-IIoTID, WUSTL-IIoT, Edge-IIoTset, and MQTTset.
+
+\cite{safe2025} achieved an average F1-score of 96.79\% across all datasets, specifically scoring 96.41\% on X-IIoTID, 99.40\% on WUSTL-IIoT, 99.95\% on Edge-IIoTset, and 91.38\% on MQTTset.
+
+\subsection{Nayak \& al., "ThreatFormer-IDS" 2026}
+\cite{nayak2026threatformer} proposes \textbf{ThreatFormer-IDS}, a unified Transformer-based sequence modeling framework that aims to reliably detect intrusions at low false-positive rates while maintaining performance against evolving traffic, generalizing to unseen attack families.s.
+\subsubsection{Datasets}
+The framework is benchmarked using the \textbf{ToN IoT} dataset, consisting of heterogeneous network traffic logs generated in a realistic Edge/Fog-Cloud testbed. 
+
+\subsubsection{Used approach }
+The architecture converts network flow records into time-ordered sequences. It utilizes four core components:
+\begin{itemize}
+    \item \textbf{Weighted Supervised Learning:} Handles class imbalances to ensure low False Positive Rates (FPR).
+    \item \textbf{Masked Self-Supervised Learning (SSL):} Improves representation stability by forcing the Transformer to reconstruct masked parts of the sequence.
+    \item \textbf{Adversarial Training (PGD):} Employs Projected Gradient Descent with scale-normalized perturbations to defend against feature-level evasion.
+    \item \textbf{Explainable Attribution:} Uses Integrated Gradients (IG) to generate attribution maps explaining which time steps and features triggered an alert.
+\end{itemize}
+A strict zero-day evaluation protocol holds out specific attack families completely during training.
+
+\subsubsection{Experimental resuts}
+\begin{itemize}
+    \item \textbf{Chronological (In-Distribution) Test:} Achieves AUC-ROC of 0.994, AUC-PR of 0.956, FPR of 0.910, and F1 of 0.976, outperforming baselines like LightGBM, 1D-CNN, and BiLSTM.
+    \item \textbf{Zero-Day Generalization:} On held-out attack families, the model maintains a superior AUC-PR of 0.721 and FPR of 0.783.
+\end{itemize}
+
+
+\section{Synthesis and Comparative Analysis}
+
+To clarify and exhibit the evolution of IDS, this table \ref{tab:sota_comp_time} provides a comprehensive comparison of the state-of-the-art models discussed in this chapter. 
+
+\begin{longtable}{|p{3cm}|p{1.5cm}|p{4cm}|p{5cm}|}
+\caption{Comparative Summary of State-of-the-Art NIDS Architectures} \label{tab:sota_comp_time} \\
+\hline
+\textbf{Research Paper} & \textbf{Release Date} & \textbf{Dataset Used} & \textbf{Result} \\ \hline
+\endfirsthead
+
+\multicolumn{4}{c}%
+{{\bfseries Table \ref{tab:sota_comp_time} }} \\
+\hline
+\textbf{Research Paper Name } & \textbf{Release Date} & \textbf{Dataset Used} & \textbf{Result Metrics} \\ \hline
+\endhead
+
+\hline
+\multicolumn{4}{r}{{}} \\ 
+\endfoot
+
+\hline
+\endlastfoot
+
+\cite{hindy2020utilisingzeroday} & 2020 & CICIDS2017, NSL-KDD & \textbf{Acc:} 75\% - 98\% (CIC), 89\% - 99\% (NSL-KDD) \\ \hline
+
+\cite{xu2021falcon} & 2021 & CICMal2017 & \textbf{Acc:} 97.16\% (Binary), 88.32\% (Multi-class) \\ \hline
+
+\cite{sarhan2021zeroshot} & 2021 & UNSW-NB15, NF-UNSW-NB15-v2 & \textbf{Z-DR (MLP):} 85.5\% to 92.45\% \\ \hline
+
+\cite{kumar2021robust} & 2021 & Real-Time Data, CICIDS18 & \textbf{Acc:} 91.33\% - 91.62\% \newline \textbf{F-Measure:} 94.1\% - 95.54\% \\ \hline
+
+\cite{mohammadpour2022survey} & 2022 & KDD Cup99, NSL-KDD, UNSW-NB15, CIC-IDS2017 & Hybrid CNN-LSTM consistently outperforms single CNNs \\ \hline
+
+\cite{wu2022rtids} & 2022 & CICIDS2017, CIC-DDoS2019 & \textbf{F1:} 99.17\% (CIC), 98.48\% (DDoS) \\ \hline
+
+\cite{k2022deep} & 2022 & CICIDS2017 & Minimized computational complexity while maintaining high detection \\ \hline
+
+\cite{kim2023deep} & 2023 & ISCXIDS2012, CSE-CIC-IDS2018 & \textbf{Acc:} 95.50\% - 95.60\% \newline \textbf{F1:} 92.52\% - 93.86\% \\ \hline
+
+\cite{liu2023intrusion} & 2023 & NSL-KDD, UNSW-NB15 & \textbf{Acc:} 87.5\% - 88.7\% \newline \textbf{F1:} 87.3\% - 88.2\% \\ \hline
+
+\cite{caville2023anomal} & 2023 & Modern Benchmark Datasets & \textbf{Macro F1:} 91.48\% - 93.04\% \\ \hline
+
+\cite{hairab2023anomaly} & 2023 & TON-IoT & \textbf{Acc:} 97.94\% \newline \textbf{F1:} 98.27\% (Backdoor) \\ \hline
+
+\cite{appani2023selfsupervised}] & 2023 & CIC-IDS2017, UNSW-NB15 & \textbf{F1:} 88\% \newline \textbf{FPR:} 1.80\% \newline \textbf{AUC:} 0.98 \\ \hline
+
+\cite{he2024network}] & 2024 & CIC IDS2017, UNSW-NB15 & \textbf{Acc:} 99.5\% (CIC), 97.25\% (UNSW) \newline \textbf{AUC:} 0.995 \\ \hline
+
+\cite{abed2024modified}] & 2024 & UNSW-NB15, WSN-DS & \textbf{Acc:} 86.93\% - 88.52\% (UNSW), 93.81\% - 99.67\% (WSN-DS) \\ \hline
+
+\cite{manocchio2024flowtransformer} & 2024 & NSL-KDD, CSE-CIC-IDS2018, UNSW-NB15 & \textbf{F1:} 98.00\% (NSL), 97.05\% (CSE), 90.45\% (UNSW) \\ \hline
+
+\cite{ullah2024ids} & 2024 & UNSW-NB15, CIC-IDS2017, NSL-KDD & \textbf{Acc:} 99.21\% \newline \textbf{F1:} 99.00\% \\ \hline
+
+\cite{armijos2024zeroday}  & 2024 & NSL-KDD, UNSW-NB15, CICIDS2017, CIC-AWS-2018 & DL models (89\%-99\% Acc) outperform SIDS/AIDS \\ \hline
+
+\cite{rajkumardheivanayahi2025explainability}  & 2025 & CIC-IDS2017, UNSW-NB15 & \textbf{Acc:} 99.48\% \newline \textbf{F1:} 98.46\% \newline \textbf{Text Gen Acc:} 95.53\% \\ \hline
+
+\cite{safe2025} & 2025 & X-IIoTID, WUSTL-IIoT, Edge-IIoTset, MQTTset & \textbf{Avg F1:} 96.79\% \\ \hline
+
+\cite{appiahene2026network} & 2026 & CSE-CIC-IDS2018 & \textbf{Test Acc:} 96.94\% \\ \hline
+
+\cite{nayak2026threatformer} & 2026 & ToN IoT & \textbf{AUC-ROC:} 0.994 \newline \textbf{F1:} 0.976 \newline \textbf{AUC-PR:} 0.956 \\ \hline
+
+\end{longtable}
+
+
+% -------------------------------------------------------------------
+% CHAPTER 5: CONCLUSION
+% -------------------------------------------------------------------
+\part{General Conclusion}
+
+This thesis presented the \textbf{Hybrid Masked Spatio-Temporal Transformer (HM-STT)}, a novel architecture for NIDS. By treating network flows as spatio-temporal volumes and utilizing tubelet embeddings, our model learns robust representations without labor-intensive labeling. Our analysis of SAFE (2025) and Falcon (2021) highlights the industry's trajectory towards self-supervision. HM-STT contributes by offering a unified model that respects the intrinsic structure of network data. Future work will focus on optimizing final efficiency for edge deployment and integrating GNNs to model inter-flow correlations.
+
+% -------------------------------------------------------------------
+% REFERENCES
+% -------------------------------------------------------------------
+\printbibliography
+
+\end{document}
