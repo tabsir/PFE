@@ -4,7 +4,7 @@
     {
       "label": "Watch Engineering Thesis PDF",
       "type": "shell",
-      "command": "tectonic",
+      "command": "/home/aka/miniconda3/bin/tectonic",
       "args": [
         "-X",
         "watch",
@@ -25,7 +25,7 @@
     {
       "label": "Watch Master Thesis PDF",
       "type": "shell",
-      "command": "tectonic",
+      "command": "/home/aka/miniconda3/bin/tectonic",
       "args": [
         "-X",
         "watch",

@@ -12,15 +12,16 @@
 \usepackage{csquotes}
 \usepackage{graphicx}
 \usepackage{polyglossia}
-\defaultfontfeatures{Ligatures=TeX}
+
 \setdefaultlanguage{english}
+\IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{}
 \setotherlanguage{arabic}
 \newfontfamily\arabicfont[Script=Arabic,Scale=1.05]{Amiri}
 \usepackage[style=ieee, backend=bibtex, sorting=none]{biblatex}
 \addbibresource{references.bib}
 \DeclareGraphicsExtensions{.jpg,.png,.pdf}
-
-\graphicspath{ {./images/} }
+\graphicspath{ {./images/} {../../NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_all_splits/figures/} }
+\newcolumntype{C}{>{\centering\arraybackslash}X}
 % Geometry Settings
 \geometry{
     top=2cm,
@@ -29,7 +30,7 @@
     right=1.5cm
 }
 % Graphics Path - ESSENTIAL for finding your pictures
-\graphicspath{ {./images/} }
+\graphicspath{ {./images/} {../../NEW/experiments/v3/checkpoints_open_set_new/nids_multitask_05_v3_open_Botood_ExShellFuzz_family/thesis_artifacts_all_splits/figures/} }
 
  % Hyperref Setup
 \hypersetup{
@@ -372,6 +373,25 @@ Modern Advanced Persistent Threats (APTs) are rarely identifiable via a single p
 
 To establish a uniform evaluation pipeline for our Spatio-Temporal Transformer, we adopt the standardized \textbf{NetFlow version 3 (NF-v3)} framework proposed by \cite{NF3-2025}. This framework extracts 53 highly granular features spanning the Network (Layer 3), Transport (Layer 4), and Application (Layer 7) layers of the OSI model. Rather than relying on raw, unparsed packet streams or disparate, proprietary dataset formats, the NF-v3 representation maps all communication data into a structured, flow-centric feature space.
 
+\subsection{Preprocessing and Normalization of Flow Features}
+Flow-based intrusion data is numerically heterogeneous. Some attributes measure counts, others durations, rates, flags, or timing intervals, and their raw scales can differ by several orders of magnitude. In practice, variables such as byte volume, packet counts, duration, and inter-arrival times are often strongly skewed and heavy-tailed. If these raw values are injected directly into a neural model, the largest-magnitude features can dominate both the learned representation and the reconstruction objective.
+
+For this reason, a preprocessing pipeline is usually applied before sequence modeling. A common first step is a signed logarithmic transform:
+\begin{equation}
+\tilde{x} = \operatorname{sign}(x)\log(1+|x|),
+\end{equation}
+which compresses extreme magnitudes while preserving the sign of the original measurement. The second step is feature-wise standardization,
+\begin{equation}
+z = \frac{\tilde{x}-\mu}{\sigma},
+\end{equation}
+where $\mu$ and $\sigma$ are the mean and standard deviation estimated on the training split only. Using train-only statistics avoids information leakage from validation or test data. A final clipping step,
+\begin{equation}
+z^{\mathrm{final}} = \operatorname{clip}(z,-c,c),
+\end{equation}
+limits the effect of residual outliers before the features are passed to the model.
+
+This normalization strategy improves numerical stability, balances the contribution of heterogeneous features, and makes optimization more reliable. Importantly, it does not erase distribution shift. Because the same train-based mapping is applied to validation, test, and OOD splits, meaningful differences between those distributions can remain visible after preprocessing. Once normalized, consecutive flows can then be grouped into sliding windows so that the downstream encoder learns correlations across short traffic sequences rather than treating each flow as a fully independent sample.
+
 \section{The Anatomy of Advanced Attacks}
 To understand why temporal modeling is mandatory for modern NIDS, cyber intrusions must be viewed through formalized, multi-stage frameworks rather than as isolated anomalies.
 
@@ -515,7 +535,7 @@ Mathematically, given a flow sequence $X = \{x_1, x_2, \dots, x_T\}$, a subset o
 \end{equation}
 where $\hat{x}_i$ is the predicted token reconstructed by the decoder. For continuous network features, this loss function is typically expressed as the Mean Squared Error (MSE).
 
-\subsection{MFM as an Anomaly Detection Trigger}
+\paragraph{MFM as an Anomaly Detection Trigger}
 MFM is well suited for Network Intrusion Detection Systems (NIDS). Traditional supervised learning relies heavily on labeled attack data, creating inherent vulnerabilities to zero-day exploits. By employing MFM as a pretext task, the Transformer model learns the intrinsic syntax, structural dependencies, and temporal dynamics of purely \textit{benign} network traffic without requiring human annotation.
 
 When deployed for anomaly detection, the MFM framework calculates the reconstruction error of incoming, real-time traffic. Legitimate flows will closely match the learned syntax, yielding a low reconstruction error. Conversely, malicious traffic—such as Advanced Persistent Threats (APTs) or zero-day malware—inherently violates the learned temporal and spatial correlations of benign traffic. The decoder will fail to reconstruct these anomalous sequences, resulting in a severe spike in the Mean Squared Error. This reconstruction failure serves as a highly accurate, dynamic intrusion alert.
@@ -675,6 +695,44 @@ Examples of hyperparameters:
 
 The distinction between parameters and hyperparameters is fundamental to machine learning: while parameters define what the model has learned, hyperparameters define how the learning process itself is conducted . Both are essential for developing effective machine learning models, but they serve different purposes and require different approaches for optimization and selection.
 
+\section{Activation Functions and Loss Design}
+
+\subsection{Sigmoid, Softmax, and GELU}
+Deep neural networks rely on nonlinear mappings to transform latent representations into decision scores. In binary classification, a scalar logit $z$ is commonly converted into a probability through the sigmoid function:
+\begin{equation}
+\sigma(z)=\frac{1}{1+e^{-z}}.
+\end{equation}
+The sigmoid squashes any real-valued score into the interval $[0,1]$, which makes it suitable for binary decisions such as malicious versus benign traffic.
+
+For multi-class classification, the corresponding mapping is the softmax function. Given a vector of logits $z = (z_1,\dots,z_C)$ over $C$ classes, the softmax probability assigned to class $c$ is
+\begin{equation}
+\operatorname{softmax}(z)_c = \frac{e^{z_c}}{\sum_{k=1}^{C} e^{z_k}}.
+\end{equation}
+Unlike sigmoid, which treats one score independently, softmax normalizes all class scores jointly and produces a full categorical distribution whose entries sum to one.
+
+Inside Transformer feed-forward and decoder blocks, smoother hidden activations are often preferred. One widely used choice is the Gaussian Error Linear Unit (GELU), defined as
+\begin{equation}
+\operatorname{GELU}(x)=x\,\Phi(x),
+\end{equation}
+where $\Phi(x)$ is the cumulative distribution function of the standard Gaussian. GELU can be interpreted as a smooth gating mechanism: small or uncertain activations are softly attenuated, while larger informative activations pass through more strongly. This makes GELU especially popular in modern Transformer architectures.
+
+\subsection{Robust Regression and Multitask Objectives}
+Not all learning objectives in deep models are pure classification losses. In self-supervised reconstruction, the model must predict continuous values, which turns the problem into a regression task. A common baseline is the Mean Squared Error (MSE), but MSE can be overly sensitive to large outliers. A more robust alternative is the SmoothL1 loss, also known as a Huber-like loss, which behaves quadratically for small errors and linearly for large ones:
+\begin{equation}
+\ell_{\mathrm{SmoothL1}}(a,b)=
+\begin{cases}
+\frac{1}{2}(a-b)^2, & |a-b|<1, \\
+|a-b|-\frac{1}{2}, & |a-b|\ge 1.
+\end{cases}
+\end{equation}
+Here, $a$ denotes the prediction and $b$ the target value. Because the penalty becomes linear beyond the transition point, SmoothL1 is less dominated by a small number of extreme residuals than MSE.
+
+In multitask learning, several objectives are optimized simultaneously. The total loss is typically written as a weighted combination,
+\begin{equation}
+\mathcal{L}=\sum_{m=1}^{M} \lambda_m\mathcal{L}_m,
+\end{equation}
+where $\mathcal{L}_m$ is the loss associated with task $m$ and $\lambda_m$ controls its contribution to the total objective. This design is useful when one shared backbone must support binary detection, family classification, forecasting, anomaly scoring, and auxiliary reconstruction at the same time.
+
 \section{Model Evaluation Metrics}
 
 \subsection{Accuracy, Precision, Recall, and F1-Score}
@@ -722,6 +780,20 @@ AUC exhibits several desirable properties compared to overall accuracy: increase
 Precision-Recall (PR) curves are particularly useful for evaluating classifiers on highly skewed datasets. Unlike ROC curves, PR curves focus on the performance of the positive class, making them more informative when the negative class dominates the dataset. The curve plots precision against recall at various threshold settings, providing a clear picture of the trade-off between these two metrics .
 
 A deep connection exists between ROC space and PR space, such that a curve dominates in ROC space if and only if it dominates in PR space  However, there are important differences: in PR space, it is incorrect to linearly interpolate between points, and algorithms that optimize the area under the ROC curve are not guaranteed to optimize the area under the PR curve. This makes PR curves essential for evaluating models on imbalanced datasets common in intrusion detection tasks.
+
+\subsubsection{Open-Set and Out-of-Distribution Evaluation}
+Classical closed-set classification assumes that every test sample belongs to one of the classes observed during training. In cybersecurity, this assumption is often unrealistic because genuinely new attack families can appear after deployment. Open-set recognition relaxes the closed-set assumption and requires the model not only to classify known classes, but also to reject samples that do not match the learned label vocabulary with sufficient confidence.
+
+This distinction is especially important for Network Intrusion Detection Systems. A model can achieve strong performance on in-distribution traffic while still failing on genuinely novel attacks. For this reason, modern IDS evaluation often includes a stricter out-of-distribution (OOD) protocol in which one or more attack families are held out during training and reserved for testing. The purpose is not merely to measure accuracy on familiar classes, but to assess whether the system can remain reliable when the attack distribution shifts beyond the supervised training regime.
+
+\subsubsection{Threshold Selection and Score Calibration}
+Many IDS models produce continuous scores rather than hard labels. A deployed decision is obtained by comparing a score to a threshold $\tau$. This leads to an important distinction between threshold-free metrics and thresholded metrics. Measures such as ROC-AUC or PR-AUC quantify ranking quality across all possible thresholds, whereas operational precision, recall, and F1-score depend directly on the chosen operating point.
+
+In practice, thresholds should be selected on a validation split and then frozen before test evaluation. This prevents optimistic bias and makes the reported deployment scenario more realistic. For anomaly scores, an additional calibration step is often used to convert a raw score $s$ into an interpretable confidence value relative to a reference validation distribution $V$:
+\begin{equation}
+\hat{p}(s)=\frac{1}{|V|}\sum_{u\in V} \mathbf{1}[u \le s],
+\end{equation}
+where $\mathbf{1}[\cdot]$ is the indicator function. This percentile-based view measures how extreme the observed score is compared with reference traffic. It also explains why ranking metrics can remain high while thresholded recall collapses under distribution shift: if the score ordering is still informative but the validation-selected threshold no longer matches the new score distribution, the deployed decision rule may fail even though the model still separates samples reasonably well.
 
 \subsubsection{Training and Validation Loss Curves}
 Training and validation loss curves are fundamental tools for monitoring the learning process of neural networks and detecting issues such as overfitting and underfitting. During training, the optimization algorithm tries to minimize the cost function of the network, and the loss curves show how this metric changes over epochs .
@@ -1306,18 +1378,66 @@ The review of the state-of-the-art in NIDS reveals significant advancements
 % -------------------------------------------------------------------
 % CHAPTER 5: Contribution 
 % -------------------------------------------------------------------
+
+
+
 \part{Contribution}
-\chapter{contibutiion}
+\chapter{}
+
 \section{Introduction}
-In this chapter, we present the main contributions of our work, which aims on improving
-intrusion detection for binary , multi-class  and zero-day attacks.
-We introduce the datasets  , details the evaluation methodology, and reports on the results obtained. We also provide a comparative discussion with related works already mentioned in the state-of-the-art part of this document.
 
-\section{System architechture}
+In this chapter, we present the main contributions of our work, which aims on improving intrusion
+detection for binary , multi-class and zero-day attacks. 
+ We introduce the datasets , details the evaluation 
+ methodology, and reports on the results obtained. 
+ We also provide a comparative discussion
+with related works already mentioned in the state-of-the-art part of this document.
+\textit{Note} We also worked on a attack prediction aspect , howerver it is not the main 
+work in our research , this will be discussed briefly and then mentioned as a future anticipation.
 
 
+\section{Proposed End-to-End Workflow}
 
-\section{Dataset and Preprocessing}
+The proposed contribution addresses four related intrusion-detection objectives within a single unified framework: current maliciousness detection, known-family attribution, unknown or zero-day escalation, and short-horizon future warning. Instead of training a separate model for each objective, the system relies on one shared spatio-temporal backbone and places the operational logic in a staged IDS hierarchy.
+
+Each input sample is a fixed host-session window built from sequential NF-v3 flows. Formally, for a host session indexed by chronological order, one window is defined as
+\begin{equation}
+X^{(w)} = (x_s, x_{s+1}, \dots, x_{s+T-1}), \qquad T=32,\; \Delta=16,
+\end{equation}
+where $x_t$ denotes the NF-v3 flow at temporal position $t$, $s$ is the start index of the current window inside its host session, $T$ is the sequence length, and $\Delta$ is the stride used to generate overlapping windows. In the implemented pipeline, the system then processes each window through five successive steps:
+\begin{enumerate}
+    \item host-session regrouping and sequence construction,
+    \item feature normalization and hybrid tokenization,
+    \item STT-based self-supervised representation learning,
+    \item downstream multitask specialization,
+    \item hierarchical routing into benign, known-attack, or unknown-attack outcomes.
+\end{enumerate}
+This ordering is essential because the hierarchical IDS does not operate directly on raw flows. It operates on downstream scores that are themselves produced from the pretrained STT representation.
+
+\section{Attack Taxonomy and Open-Set Evaluation Design}
+
+To ensure compatibility between \textbf{NF-CICIDS2018-v3}\cite{NF3_IDS2018} and \textbf{NF-UNSW-NB15-v3}\cite{NF_UNSW_NB15_v3}, the raw attack labels were consolidated into a smaller and more stable family vocabulary. This grouping reduces label fragmentation and produces a common supervised space across the two benchmarks.
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Traffic roles .}
+    \label{tab:contribnew_attack_roles}
+    \begin{tabularx}{\textwidth}{p{3.1cm} X X}
+        \toprule
+        Traffic role & Families & Function in the evaluation protocol \\
+        \midrule
+        Known supervised attacks & DoS / DDoS; Brute Force; Infiltration; Web Attacks; Analysis / Backdoors; Reconnaissance; Worms / Generic & Used by the closed-set family head during downstream training and standard evaluation. \\
+        Pseudo-zero-day attacks & Fuzzers; Exploits / Shellcode & Removed from known-family supervision and redirected to the unknown-attack target in the standard open-set train, validation, and test protocol. \\
+        Strict held-out family & Botnets & Reserved for the dedicated \texttt{test\_ood} benchmark in order to measure transfer to a genuinely unseen attack family. \\
+        Benign traffic & Benign windows from both NF-v3 sources & Negative class for the current-attack detector and calibration reference for novelty-aware thresholds. \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+This two-level open-set design was chosen for two complementary reasons. First, the pseudo-zero-day setting provides a realistic operational scenario in which malicious traffic is present but its family label is intentionally removed from the closed-set classifier. Second, the stricter \texttt{test\_ood} benchmark preserves a more demanding held-out-family condition, which tests whether the system can generalize to genuinely unseen attack behavior rather than only reject attacks that stay close to the validation distribution.
+
+\section{Dataset Representation, Feature Space, and Sequential Construction}
 
 \subsection{NF-v3 Data Representation and Source Benchmarks}
 
@@ -1326,9 +1446,7 @@ The dataset used in this work is a unified flow-based intrusion detection corpus
 In total, the NF-v3 schema provides \textbf{53 flow attributes}. In our implementation, these attributes were not all used in the same way. More precisely, \textbf{40 attributes} were treated as continuous variables and normalized before training, \textbf{9 attributes} were treated as categorical protocol or control variables and encoded through embeddings, and \textbf{4 attributes} were retained for temporal ordering and session construction rather than being injected directly as predictive inputs. 
 
 
-
-
-\subsubsection{NF-v3 Attributes Used in the Proposed Pipeline}
+\subsubsection{Exploited NF-v3 Attributes in the Proposed Pipeline}
 \begin{table}[H]
 \centering
 \footnotesize
@@ -1369,8 +1487,7 @@ Used for binary supervision, attack-family annotation, dataset-origin tracking, 
 \end{tabularx}
 \end{table}
 
-\subsubsection{Reasons for Adopting NF-v3}
-
+\newpage
 The choice of NF-v3 in this work was guided by three main reasons:
 
 \begin{itemize}
@@ -1386,81 +1503,409 @@ The choice of NF-v3 in this work was guided by three main reasons:
 
 
 
+The input corpus is built from \textbf{NF-CICIDS2018-v3} \cite{NF3_IDS2018} and \textbf{NF-UNSW-NB15-v3} \cite{NF-UNSW-NB15-v3}. Every observation is a bidirectional network flow described in the standardized NF-v3 feature space. This common representation enables joint training across heterogeneous sources while preserving the temporal and directional statistics required by the proposed spatio-temporal model.
 
+At time step $t$, one flow is decomposed as
+\begin{equation}
+x_t = \left(x_t^{(c)},\; x_t^{(g)},\; x_t^{(o)}\right),
+\end{equation}
+where $x_t^{(c)} \in \mathbb{R}^{40}$ denotes the continuous feature block, $x_t^{(g)}$ denotes the nine categorical protocol or context variables, and $x_t^{(o)}$ denotes the operational fields used for ordering, provenance, and supervision rather than as direct predictive inputs.
 
-\subsection{Preprocessing Pipeline}
+\subsection{Preprocessing and Sequential Construction}
+\paragraph{Host-session regrouping and window construction.}
+The original NF-v3 flows are regrouped into host sessions based on the source IP address and chronological order. Each host session is then segmented into fixed windows of 32 flows with a stride of 16, while ensuring that windows do not cross session boundaries. This process creates overlapping sequences of flows that capture temporal dynamics within each host session, which are essential for the spatio-temporal modeling approach.
+\paragraph{Feature normalization and tokenization.}
+The preprocessing stage converts regrouped host-session traffic into stable sequential inputs. First, invalid values such as \texttt{NaN} and infinite values are replaced with zeros. Second, each continuous feature is transformed by a signed logarithmic mapping:
+\begin{equation}
+\tilde{x}_{ij} = \operatorname{sign}(x_{ij})\log\left(1 + |x_{ij}|\right),
+\end{equation}
+where $x_{ij}$ is the raw value of continuous feature $j$ in flow $i$, $\tilde{x}_{ij}$ is the transformed value, and $\operatorname{sign}(\cdot)$ preserves the sign of the original measurement while compressing heavy-tailed magnitudes.
 
-The preprocessing stage was designed to convert the regrouped host-session dataset into standardized sequential inputs suitable for Transformer-based modeling. It consisted of the following operations:
+The transformed features are standardized with train-only statistics:
+\begin{equation}
+z_{ij} = \frac{\tilde{x}_{ij} - \mu_j}{\sigma_j},
+\end{equation}
+where $\mu_j$ is the training-set mean of feature $j$, $\sigma_j$ is the corresponding training-set standard deviation, and $z_{ij}$ is the z-score normalized value used before clipping. To limit the effect of residual outliers, the final normalized input is clipped as
+\begin{equation}
+z_{ij}^{\mathrm{final}} = \operatorname{clip}(z_{ij}, -5, 5),
+\end{equation}
+where $\operatorname{clip}(\cdot)$ truncates the normalized value to the interval $[-5,5]$.
 
-\begin{itemize}
-    \item \textbf{Feature typing.}  
-    The NF-v3 attributes were separated into 40 continuous variables and 9 categorical variables. Temporal and identity fields were retained for ordering and supervision, but not directly used as predictive continuous inputs.
+After normalization, the flows are organized into fixed windows of 32 observations with stride 16, while preserving host-session boundaries. This step is critical because it transforms isolated flows into short traffic narratives that can be processed by a spatio-temporal encoder instead of by a flat classifier.
 
-    \item \textbf{Training-only statistics estimation.}  
-    The mean and standard deviation of each continuous feature were computed exclusively on the training split to avoid information leakage into validation and test.
-
-    \item \textbf{Numerical cleaning and transformation.}  
-    Missing and infinite values were replaced with zeros. Continuous variables were then transformed using a signed logarithmic mapping,
-    \[
-    x' = \operatorname{sign}(x)\log(1+|x|),
-    \]
-    in order to reduce the effect of heavy-tailed feature distributions.
-
-    \item \textbf{Z-score normalization and clipping.}  
-    After transformation, each continuous attribute was standardized using the training-set mean and standard deviation, and the resulting values were clipped to the interval $[-5,5]$ to improve stability during optimization.
-
-    \item \textbf{Sequence construction.}  
-    The preprocessed flows were converted into fixed-length sequences of 32 flows with a stride of 16. Sequence generation was restricted by the host-session identifier so that no sequence crossed a session boundary.
-\end{itemize}
-
-
-\subsubsection{Data Splits}
-
-\newcolumntype{C}{>{\centering\arraybackslash}X}
 \begin{table}[H]
-\centering
-\caption{Dataset composition after host-session regrouping and split reassignment.}
-\label{tab:dataset_splits}
-\begin{tabularx}{\linewidth}{l C C C}
-\toprule
-\textbf{Split} & \textbf{Total Flows} & \textbf{Attack Rate (\%)} & \textbf{Share (\%)} \\
-\midrule
-Train       & 15,771,504 & 12.79 & 70.16 \\
-Validation  &  3,650,919 &  7.85 & 16.24 \\
-Test        &  2,847,338 &  7.63 & 12.67 \\
-Test-OOD    &    211,192 & 98.35 &  0.94 \\
-\midrule
-\textbf{Combined} & \textbf{22,480,953} & \textbf{12.14} & \textbf{100.00} \\
-\bottomrule
-\multicolumn{4}{p{\linewidth}}{\smallskip\footnotesize \textit{Note:} Validation and test splits were balanced with benign host sessions to maintain an attack prevalence close to 8\%, whereas \texttt{Test-OOD} was intentionally reserved for held-out unknown-family evaluation.}
-\end{tabularx}
+    \centering
+    \caption{Dataset composition used by the revised contribution chapter after host-session regrouping and split reassignment.}
+    \label{tab:contribnew_dataset_splits}
+    \begin{tabularx}{\linewidth}{l C C C}
+        \toprule
+        \textbf{Split} & \textbf{Total Flows} & \textbf{Attack Rate (\%)} & \textbf{Share (\%)} \\
+        \midrule
+        Train       & 15,771,504 & 12.79 & 70.16 \\
+        Validation  &  3,650,919 &  7.85 & 16.24 \\
+        Test        &  2,847,338 &  7.63 & 12.67 \\
+        Test-OOD    &    211,192 & 98.35 &  0.94 \\
+        \midrule
+        \textbf{Combined} & \textbf{22,480,953} & \textbf{12.14} & \textbf{100.00} \\
+        \bottomrule
+    \end{tabularx}
 \end{table}
 
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.82\textwidth]{feature_mean_shift_across_splits.png}
+    \caption{Mean comparison of the most active continuous NF-v3 features across train, validation, test, and \texttt{test\_ood}. The plot illustrates that the signed-log preprocessing compresses heavy-tailed magnitudes while preserving meaningful inter-split differences.}
+    \label{fig:contribnew_feature_shift}
+\end{figure}
+
+\section{STT Representation-Learning Backbone}
+
+\subsection{Hybrid Embedding and Token Fusion}
+
+The Spatio-Temporal Transformer backbone operates on fixed windows of length $T=32$. At each time step, the continuous and categorical branches are embedded separately before fusion. If $d=256$ denotes the latent width of the model, the continuous projection is defined as
+\begin{equation}
+h_t^{(c)} = W_c x_t^{(c)} + b_c,
+\end{equation}
+where $x_t^{(c)} \in \mathbb{R}^{40}$ is the normalized continuous vector at time step $t$, $W_c \in \mathbb{R}^{d \times 40}$ is the learned linear projection, $b_c \in \mathbb{R}^{d}$ is the bias term, and $h_t^{(c)} \in \mathbb{R}^{d}$ is the continuous latent token.
+
+For each categorical field $k \in \{1,\dots,9\}$, the model uses an independent embedding table:
+\begin{equation}
+h_t^{(g,k)} = \operatorname{Emb}_k\left(x_t^{(g,k)}\right),
+\end{equation}
+where $x_t^{(g,k)}$ is the categorical value of field $k$ at time step $t$, $\operatorname{Emb}_k(\cdot)$ is the learned embedding lookup for that field, and $h_t^{(g,k)} \in \mathbb{R}^{d_g}$ is the resulting categorical embedding.
+
+The full token is obtained by concatenating the continuous branch and the nine categorical branches and projecting them back into the common latent space:
+\begin{equation}
+h_t^{(0)} = W_f\left[h_t^{(c)} \| h_t^{(g,1)} \| \cdots \| h_t^{(g,9)}\right] + b_f,
+\end{equation}
+where $\|$ denotes concatenation, $W_f$ and $b_f$ are the learned fusion parameters, and $h_t^{(0)} \in \mathbb{R}^{d}$ is the fused input token that enters the STT encoder.
+
+Figure~\ref{fig:contribnew_hybrid_embedding_schema} summarizes this embedding pipeline from one raw NF-v3 flow to the fused token consumed by the STT encoder.
+
+\begin{figure}[H]
+    \centering
+     \includegraphics[width=1\linewidth]{./images/tokem-and-embandin-for-the-contributionp.png}
+     \caption{Schema of the hybrid embedding and token-fusion stage. Each NF-v3 flow is split into continuous and categorical components, embedded in parallel, concatenated, and projected into a common latent representation before entering the Spatio-Temporal Transformer.}
+    \label{fig:contribnew_hybrid_embedding_schema}
+\end{figure}
+
+\subsection{MAE-Style Spatial Masking and MFM Corruption}
+
+After fusion, a learned positional encoding $p_t$ is added so that the encoder can distinguish early and late events in the window. The first corruption operator corresponds to \textbf{MAE-style spatial masking}, which replaces a subset of time steps with a learned mask token:
+\begin{equation}
+\tilde{h}_t^{(0)} =
+\begin{cases}
+m, & M_t = 1, \\
+h_t^{(0)} + p_t, & M_t = 0,
+\end{cases}
+\end{equation}
+where $M_t \in \{0,1\}$ is the binary masking indicator at time step $t$, $m$ is the learned mask vector, and $p_t$ is the positional embedding for time step $t$.
+
+The second corruption operator corresponds to \textbf{Masked Flow Modeling (MFM)}, which perturbs the sequence in the frequency domain:
+\begin{equation}
+H_f = \mathcal{F}(H), \qquad
+\hat{H}_f = H_f \odot (1-Z), \qquad
+\tilde{H} = \mathcal{F}^{-1}(\hat{H}_f),
+\end{equation}
+where $H$ is the sequence of fused tokens over the full window, $\mathcal{F}(\cdot)$ is the real Fourier transform applied along the temporal axis, $Z$ is a random binary spectral mask, $\odot$ denotes element-wise multiplication, and $\tilde{H}$ is the inverse-transformed corrupted sequence. MAE-style masking removes local observations in the original temporal domain, whereas MFM perturbs broader periodic and global temporal structure.
 
 
 
-\subsection{Estimation of Normalization Statistics}
-\label{subsec:normalization_stats}
 
-After the session-based regrouping and split generation stage, the next preprocessing step consists in estimating normalization statistics for the continuous NF-v3 attributes. This operation is implemented in \texttt{01\_build\_zscore\_stats.py}. Its role is not to modify the dataset structure, but rather to learn a stable normalization reference from the training split only, which is later reused during sequence construction. Restricting this computation to the training subset prevents information leakage from the validation and test sets into the preprocessing pipeline.
+\subsection{Encoder, Decoder, and Shared Sequence Representation}
 
-The script loads the grouped training split stored under \texttt{NEW/data/nids\_src\_grouped/train} and first separates continuous variables from non-continuous or operational fields. Temporal attributes, IP addresses, dataset provenance, session identifiers, labels, attack names, and categorical protocol-related fields are excluded from this stage. The remaining variables correspond to the 40 continuous NF-v3 features used as numerical inputs to the model.
+The corrupted token sequence is processed by a Transformer encoder with four layers and eight attention heads per layer. The final encoder output is denoted by $H^{(L)} \in \mathbb{R}^{T \times d}$. The lightweight reconstruction decoder predicts only the continuous feature block:
+\begin{equation}
+\hat{x}_t^{(c)} = W_2\,\phi\left(W_1 h_t^{(L)} + b_1\right) + b_2,
+\end{equation}
+where $h_t^{(L)}$ is the encoder output at time step $t$, $W_1$ and $W_2$ are decoder weights, $b_1$ and $b_2$ are decoder biases, and $\phi(\cdot)$ is the GELU activation.
 
-To ensure numerical robustness, the data are processed in batches rather than being loaded entirely into memory. Within each batch, invalid values such as \texttt{NaN}, positive infinity, and negative infinity are replaced with zeros. Since several traffic descriptors, such as byte counts, packet counts, durations, and throughput values, exhibit highly skewed distributions, a signed logarithmic transformation is applied before standardization:
-\[
-x' = \operatorname{sign}(x)\log(1 + |x|).
-\]
-This transformation compresses extreme values while preserving the relative ordering of the observations, thereby reducing the influence of heavy-tailed effects on the subsequent normalization step.
+For downstream use, the latent sequence is pooled into one shared representation:
+\begin{equation}
+\bar{h} = \frac{1}{T}\sum_{t=1}^{T} h_t^{(L)},
+\qquad
+h_j^{\max} = \max_{1 \le t \le T} \left(h_t^{(L)}\right)_j,
+\qquad
+r = W_r\left[\bar{h} \| h^{\max}\right] + b_r,
+\end{equation}
+where $\bar{h}$ is the temporal mean-pooled vector, $h^{\max}$ is the coordinate-wise max-pooled vector, $j \in \{1,\dots,d\}$ indexes the latent coordinates, and $r$ is the shared representation used by the downstream heads.
 
-Once the transformed values have been accumulated over the full training split, the mean and standard deviation of each continuous feature are computed. These statistics are then stored in the file \texttt{NEW/nids\_normalization\_stats.json}, together with the ordered list of the corresponding feature names. This file constitutes the output of the normalization stage and serves as the reference used later by the data loader to standardize every input window consistently across training, validation, and test conditions.
+\section{Self-Supervised Foundation Pretraining}
 
-In summary, the purpose of \texttt{01\_build\_zscore\_stats.py} is to derive train-only normalization parameters for the continuous NF-v3 attributes, thereby ensuring numerical stability, preventing preprocessing leakage, and preparing the dataset for the sequence construction stage.
+The first training stage optimizes the STT backbone through masked reconstruction. Given a corrupted window, the decoder predicts the original continuous traffic variables without using attack-family supervision. The masked reconstruction term is
+\begin{equation}
+\mathcal{L}_{\mathrm{masked}} = \frac{1}{|M|F_c}
+\sum_{t: M_t=1}\sum_{j=1}^{F_c}
+\ell_{\mathrm{SmoothL1}}\left(\hat{x}_{t,j}^{(c)}, x_{t,j}^{(c)}\right),
+\end{equation}
+where $|M|$ is the number of spatially masked time steps, $F_c=40$ is the number of continuous features, $x_{t,j}^{(c)}$ is the ground-truth normalized value of feature $j$ at time step $t$, $\hat{x}_{t,j}^{(c)}$ is its reconstruction, and $\ell_{\mathrm{SmoothL1}}(\cdot,\cdot)$ is the robust regression loss.
 
-\section{The ST-Transformer Architecture}
-\subsection{Model Overview}
-\subsection{Autoencoder Pretraining}
+The full-window auxiliary term is
+\begin{equation}
+\mathcal{L}_{\mathrm{full}} = \frac{1}{TF_c}
+\sum_{t=1}^{T}\sum_{j=1}^{F_c}
+\ell_{\mathrm{SmoothL1}}\left(\hat{x}_{t,j}^{(c)}, x_{t,j}^{(c)}\right),
+\end{equation}
+where $T=32$ is the window length. The final self-supervised objective is the weighted combination
+\begin{equation}
+\mathcal{L}_{\mathrm{rec}} = 0.85\,\mathcal{L}_{\mathrm{masked}} + 0.15\,\mathcal{L}_{\mathrm{full}},
+\end{equation}
+where the masked term dominates the loss in order to force the model to infer missing traffic patterns while the full term preserves global coherence.
+
+For anomaly-aware monitoring, the sequence-level reconstruction score is defined as
+\begin{equation}
+s = \frac{1}{TF_c}\sum_{t=1}^{T}\sum_{j=1}^{F_c}
+\left(\hat{x}_{t,j}^{(c)} - x_{t,j}^{(c)}\right)^2,
+\end{equation}
+where $s$ is the average full-window reconstruction error. Although this score is computed during a self-supervised stage, it later becomes useful for novelty estimation because benign and malicious windows tend to induce different reconstruction profiles.
+\paragraph{Progressive Masking Adaptation and Checkpoint Selection.}
+The masking curriculum is summarized in Table~\ref{tab:contribnew_masking_schedule}. The main idea is to start from light corruption and progressively increase difficulty so that the backbone first learns coarse traffic regularities before solving harder temporal and spectral reconstruction problems.
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Progressive masking schedule used during self-supervised pretraining.}
+    \label{tab:contribnew_masking_schedule}
+    \begin{tabularx}{\linewidth}{p{2.0cm} p{2.1cm} >{\centering\arraybackslash}p{1.8cm} >{\centering\arraybackslash}p{1.8cm} X}
+        \toprule
+        \textbf{Stage} & \textbf{Epoch range} & \textbf{MAE} & \textbf{MFM} & \textbf{Role} \\
+        \midrule
+        Stage 1 & 0--4 & 0.10 & 0.00 & Learn basic local temporal structure with light spatial masking only. \\
+        Stage 2 & 5--14 & 0.10 to 0.20 & 0.00 to 0.03 & Introduce mild frequency corruption while increasing spatial masking. \\
+        Stage 3 & 15--29 & 0.20 to 0.30 & 0.03 to 0.08 & Strengthen both masking branches and force richer contextual reconstruction. \\
+        Stage 4 & 30+ & 0.30 to 0.35 & 0.08 to 0.10 & Reach the final hard regime used at the end of pretraining. \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+For checkpoint selection, the validation setting is kept fixed rather than progressive:
+\begin{itemize}
+    \item \textbf{Retained validation masks:} MAE$=0.30$ and MFM$=0.10$, applied with deterministic masks.
+    \item \textbf{Reason for this choice:} this pair stays close to the final training difficulty while still preserving enough visible temporal context for stable and comparable evaluation across epochs.
+    \item \textbf{Selection rule:} the best foundation checkpoint is the one with the lowest combined validation masked MSE across the MAE and MFM views; PR-AUC and AUROC are used only as tie-breakers when reconstruction quality is nearly identical.
+\end{itemize}
+
+\section{Multitask Fine-Tuning and Downstream Training}
+
+After the self-supervised masked pretraining stage, the best foundation checkpoint is reused to initialize the downstream NIDS wrapper. In other words, 
+the previous stage learned a general representation of traffic behavior through MAE and MFM reconstruction, whereas the present stage 
+reuses that pretrained representation for supervised IDS tasks.
+ At this point, the model is no longer optimized mainly to reconstruct masked flows.
+  Instead, task-specific heads are trained to predict current maliciousness, known attack family,
+   unknown-risk status, and future warning, while the reconstruction term is kept
+    only as a auxiliary regularizer.
+
+Here, the \textbf{backbone} refers to the pretrained STT module itself, namely its hybrid embedding block, positional encoding, masking components, transformer encoder, and reconstruction decoder. When this backbone is kept fixed, these pretrained parameters are not updated by gradient descent.
+
+The downstream training proceeds in two explicit phases:
+\begin{itemize}
+    \item \textbf{Warm-up and partial freezing:} during the first epochs, the pretrained STT weights are kept fixed, so the backbone does not change. Only the newly added downstream heads learn how to map the existing pretrained representation to the IDS outputs.
+    \item \textbf{Progressive unfreezing:} after this initial adaptation, the backbone weights are gradually made trainable again. The STT can then adjust its internal representation to current detection, family prediction, unknown-risk estimation, and future warning, while still preserving the traffic structure learned during pretraining.
+\end{itemize}
+
+The downstream objective is defined as
+\begin{equation}
+\mathcal{L}_{\mathrm{multi}} = \lambda_{\mathrm{cur}}\mathcal{L}_{\mathrm{cur}} + \lambda_{\mathrm{fam}}\mathcal{L}_{\mathrm{fam}} + \lambda_{\mathrm{fut}}\mathcal{L}_{\mathrm{fut}} + \lambda_{\mathrm{unk}}\mathcal{L}_{\mathrm{unk}} + \lambda_{\mathrm{rec}}\mathcal{L}_{\mathrm{rec}} + \lambda_{\mathrm{reg}}\mathcal{L}_{\mathrm{reg}},
+\end{equation}
+where $\lambda_{\mathrm{cur}}, \lambda_{\mathrm{fam}}, \lambda_{\mathrm{fut}}, \lambda_{\mathrm{unk}}, \lambda_{\mathrm{rec}}$, and $\lambda_{\mathrm{reg}}$ are the task weights, $\mathcal{L}_{\mathrm{cur}}$ is the binary current-attack loss, $\mathcal{L}_{\mathrm{fam}}$ is the family-classification loss over the known families, $\mathcal{L}_{\mathrm{fut}}$ is the aggregated future-warning loss over the 10-minute and 15-minute horizons, $\mathcal{L}_{\mathrm{unk}}$ supervises the explicit unknown-risk head, $\mathcal{L}_{\mathrm{rec}}$ keeps a lightweight reconstruction auxiliary active, and $\mathcal{L}_{\mathrm{reg}}$ regularizes the family logits on unknown windows so that unseen attacks are not over-confidently forced into a known family.
+
+An important design choice is that future-warning supervision is applied only to windows that are currently benign. This prevents the temporal head from learning on windows where the attack is already active. After the main multitask stage, the pipeline runs a lightweight family-refinement phase in which only the shared projection blocks and the family head remain trainable. The purpose of this last phase is to sharpen the family decision boundary without sacrificing the global quality of current detection or open-set behavior.
+
+\section{Hierarchical IDS Decision Logic}
+
+Once the downstream heads are trained, the three-tier IDS hierarchy is applied at decision time, that is, during validation and test inference on held-out windows and later during deployment. It is not the mechanism used to optimize the heads during training. The first tier evaluates whether the current window is malicious, the second tier tries to assign a known attack family, and the third tier decides whether the sample should be escalated as unknown or zero-day traffic.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.98\textwidth]{./images/ids_general_archi.png}
+    \caption{Revised hierarchical IDS view. The STT backbone provides the shared representation, and the decision logic then routes each traffic window through benign filtering, known-family attribution, and unknown-attack escalation.}
+    \label{fig:contribnew_hierarchical_schema}
+\end{figure}
+
+The current-attack head outputs
+\begin{equation}
+p_{\mathrm{cur}} = \sigma(z_{\mathrm{cur}}),
+\end{equation}
+where $z_{\mathrm{cur}}$ is the binary maliciousness logit and $\sigma(\cdot)$ is the sigmoid function that converts this logit into a probability.
+
+The family head produces a softmax distribution over the known family vocabulary:
+\begin{equation}
+p_{\mathrm{fam}}(c) = \operatorname{softmax}(z_{\mathrm{fam}})_c,
+\qquad
+c^* = \arg\max_c p_{\mathrm{fam}}(c),
+\end{equation}
+where $z_{\mathrm{fam}}$ is the vector of family logits, $p_{\mathrm{fam}}(c)$ is the posterior assigned to family $c$, and $c^*$ is the most probable known family.
+
+The reconstruction-based novelty probability is obtained by calibrating the sequence-level reconstruction score:
+\begin{equation}
+p_{\mathrm{recon}} = \mathcal{C}(s),
+\end{equation}
+where $s$ is the reconstruction score defined previously and $\mathcal{C}(\cdot)$ is the benign-validation calibration mapping that converts reconstruction error into a percentile-based anomaly probability.
+
+The final hybrid unknown-risk score is then defined as
+\begin{equation}
+p_{\mathrm{unk}} = \max\left(p_{\mathrm{ood-head}},\; p_{\mathrm{recon}}\right),
+\end{equation}
+where $p_{\mathrm{ood-head}}$ is the explicit probability produced by the unknown-risk head and $p_{\mathrm{recon}}$ is the calibrated reconstruction-based anomaly probability.
+
+The complete decision rule is therefore
+\begin{equation}
+\text{status}=
+\begin{cases}
+\text{Benign}, & p_{\mathrm{cur}} < \tau_{\mathrm{cur}} \text{ and } p_{\mathrm{unk}} < \tau_{\mathrm{unk}}, \\
+\text{Novelty Watch}, & p_{\mathrm{cur}} < \tau_{\mathrm{cur}} \text{ and } p_{\mathrm{unk}} \ge \tau_{\mathrm{unk}}, \\
+\text{Known Attack } c^*, & p_{\mathrm{cur}} \ge \tau_{\mathrm{cur}},\; p_{\mathrm{unk}} < \tau_{\mathrm{unk}},\; p_{\mathrm{fam}}(c^*) \ge \tau_{\mathrm{known}}, \\
+\text{Unknown Attack}, & \text{otherwise.}
+\end{cases}
+\end{equation}
+where $\tau_{\mathrm{cur}}$ is the binary maliciousness threshold, $\tau_{\mathrm{unk}}$ is the unknown-escalation threshold, and $\tau_{\mathrm{known}}$ is the minimum confidence required to accept a known-family attribution. In operational terms, this means that the system first decides whether a window is suspicious, then asks whether the suspicious pattern matches a known family, and finally escalates it to the unknown branch if the known explanation is not sufficiently credible.
+
+\section{Evaluation Protocol}
+
+The revised contribution chapter follows the same open-set benchmark protocol as the implemented system. Validation is used both to rank checkpoints and to select the deployed thresholds. Once selected, the thresholds are frozen and reported on train, validation, test, and \texttt{test\_ood}. This design avoids test-set threshold tuning and makes the held-out-family failure mode directly interpretable.
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Deployed thresholds retained by the downstream open-set benchmark.}
+    \label{tab:contribnew_thresholds}
+    \begin{tabularx}{\textwidth}{p{3cm} p{2.2cm} X}
+        \toprule
+        Symbol & Value & Meaning \\
+        \midrule
+        $\tau_{\mathrm{cur}}$ & 0.9266 & Threshold used by the current-attack head to decide whether the present window is malicious. \\
+        $\tau_{\mathrm{unk}}$ & 0.4884 & Threshold used by the hybrid unknown-risk branch to escalate suspicious windows toward novelty or zero-day status. \\
+        $\tau_{\mathrm{known}}$ & 0.4013 & Minimum family confidence required to accept a known-family attribution. \\
+        $\tau_{10\mathrm{m}}$ & 0.1339 & Operating threshold for the 10-minute future-warning head. \\
+        $\tau_{15\mathrm{m}}$ & 0.2201 & Operating threshold for the 15-minute future-warning head. \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{split_sequence_distribution.png}
+    \caption{Open-set split composition: sequence counts and attack prevalence across train, validation, test, and \texttt{test\_ood}.}
+    \label{fig:contribnew_split_sequence_distribution}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{split_known_unknown_distribution.png}
+    \caption{Open-set split composition: benign, known-attack, and unknown-attack composition across train, validation, test, and \texttt{test\_ood}.}
+    \label{fig:contribnew_split_known_unknown_distribution}
+\end{figure}
+
+Because intrusion datasets are strongly imbalanced, the main reported metrics are PR-AUC, ROC-AUC, F1-score, and thresholded recall or precision. 
+PR-AUC is especially important here because it emphasizes positive-class performance under heavy benign dominance.
+
+\section{Experimental Results and Interpretation}
+
+\subsection{Validation Dynamics and Checkpoint Selection}
+
+The checkpoint-selection process is multi-objective rather than purely binary. 
+Validation ranking combines current-attack quality, 
+unknown-risk quality, 
+and known-family acceptance behavior, future-warning quality.
+ As a consequence, 
+ the highest composite validation score does not necessarily
+  correspond to the epoch with the absolute
+   highest current-attack PR-AUC.
+
+The validation overview is separated below into four standalone figures for readability.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{v3_validation_score_pr_auc.png}
+    \caption{Validation score and PR-AUC across downstream refinement epochs. The global validation score is shown together with current-detection, unknown-risk, and future-warning PR-AUC indicators used during checkpoint ranking.}
+    \label{fig:contribnew_validation_score_pr_auc}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{v3_validation_auc_curves.png}
+    \caption{Validation AUC trends across downstream refinement epochs. This view summarizes the ranking behavior of the current-detection, unknown-risk, and future-warning branches over the retained checkpoints.}
+    \label{fig:contribnew_validation_auc_curves}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{v3_validation_present_detection_metrics.png}
+    \caption{Present-detection validation metrics across downstream refinement epochs. Precision stays almost perfect while recall and F1 change only slightly, which confirms that the current-attack head is already saturated early.}
+    \label{fig:contribnew_validation_present_metrics}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{v3_validation_family_novelty_metrics.png}
+    \caption{Family and novelty validation metrics across downstream refinement epochs. These diagnostics show how accepted known-family accuracy and unknown-risk recall continue to influence the final checkpoint choice.}
+    \label{fig:contribnew_validation_family_novelty_metrics}
+\end{figure}
+
+\subsection{Quantitative Summary Across Splits}
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Summary of the downstream open-set benchmark in the revised contribution chapter. Family coverage denotes the proportion of known-attack windows for which the system accepts a family prediction at the deployed confidence threshold.}
+    \label{tab:contribnew_results_summary}
+    \begin{tabularx}{\textwidth}{l *{6}{>{\centering\arraybackslash}X}}
+        \toprule
+        Split & Current PR-AUC & Current F1 & Unknown PR-AUC & Unknown F1 & Family coverage & Raw family macro F1 \\
+        \midrule
+        Train & 0.979 & 0.916 & 0.961 & 0.926  & 0.058 & 0.481 \\
+        Validation & 0.969 & 0.947 & 0.870 & 0.881  & 0.032 & 0.427 \\
+        Test & 0.936 & 0.855 & 0.750 & 0.829  & 0.049 & 0.394 \\
+        Test\_OOD & 0.969 & 0.000 & 1.000 & 0.000  & -- & -- \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+This table highlights the main pattern of the proposed contribution. The pretrained STT transfers well to the standard train, validation, and test distributions, especially for present-attack detection and standard open-set rejection. However, the strict held-out-family benchmark remains the hardest operating condition and exposes a severe threshold-transfer problem.
+
+\subsection{Present Detection and Unknown-Risk Ranking}
+
+Present-attack detection is the strongest task of the downstream model. The system reaches PR-AUC values of $0.979$ on train, $0.969$ on validation, and $0.936$ on test. The deployed threshold is conservative: precision remains essentially perfect on validation and test, benign false-positive rates remain close to zero, but recall decreases on the test split. This means that the learned backbone separates malicious from benign traffic well, but the selected operating point favors alert precision over maximum attack coverage.
+
+Unknown-risk detection also performs well on the standard open-set regime. The unknown-risk PR-AUC remains high from train to validation and stays useful on test, with strong recall and low benign-and-known false-positive rates. This shows that the system can already reject a large portion of suspicious traffic instead of forcing every malicious window into the known family taxonomy.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{validation_current_curves.png}
+    \caption{Validation curves for present-attack detection in the revised IDS. The ranking behavior remains strong on the validation distribution.}
+    \label{fig:contribnew_validation_current_curves}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{validation_ood_curves.png}
+    \caption{Validation curves for unknown-risk detection in the revised IDS. The figure confirms strong novelty-ranking behavior on the validation distribution.}
+    \label{fig:contribnew_validation_ood_curves}
+\end{figure}
 
 
+
+\subsection{Held-Out-Family Failure on \texttt{test\_ood}}
+
+The most important limitation appears on \texttt{test\_ood}. At the deployed thresholds, the current-attack head, the unknown-risk head, and the future-warning heads all collapse to zero operational recall and F1, despite very high ranking metrics such as PR-AUC. This is not a contradiction. It means that the score ordering still separates samples, but the validation-selected thresholds do not transfer to the score distribution induced by the fully held-out family.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{test_current_curves.png}
+    \caption{Generalization curves on the standard test split. The current-attack head still shows strong ranking behavior under the standard evaluation regime.}
+    \label{fig:contribnew_test_current_curves}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{test_ood_current_threshold_sweep.png}
+    \caption{Threshold-transfer failure on \texttt{test\_ood}. The validation-selected operating point lies outside the useful decision region for the held-out-family benchmark.}
+    \label{fig:contribnew_test_ood_threshold_sweep}
+\end{figure}
+
+\section{Main Findings of the Revised Contribution}
+
+The revised contribution chapter leads to four main findings. First, the STT backbone learns a useful traffic representation through masked self-supervision and transfers well to binary attack detection. Second, the unknown-risk branch already provides practical value on the standard open-set regime by preventing aggressive forced assignment into known families. Third, future warning and family attribution are informative but still less mature than present detection. Fourth, the strict held-out-family benchmark remains unresolved: the main limitation of the current system is not ranking quality alone, but the lack of threshold robustness under distribution shift. Consequently, the proposed architecture provides a strong and well-grounded hierarchical IDS foundation, but fully reliable held-out-family generalization still requires stronger OOD calibration and more robust open-set adaptation mechanisms.
 
 
 
